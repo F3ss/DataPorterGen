@@ -1,0 +1,52 @@
+version: 1
+seed: 12345
+templateSelection: SEQUENTIAL
+batchSize: 2
+parallelism: 2
+maxWorkingMegabytes: 16
+maxInFlightMegabytes: 4
+
+sharedDates:
+  operationDate:
+    kind: fixed
+    value: 2026-09-02T10:20:30.123456Z
+
+collections:
+  - name: customers
+    count: 3
+    query: { "templateEnabled": true }
+    fields:
+      /_id: { kind: objectId }
+      /ordinal: { kind: sequence, start: 100, step: 1 }
+      /code: { kind: randomAlphaNumStringBetween, min: 0, max: 392000, length: 6 }
+      /operationDate:
+        kind: dateTime
+        source: { kind: shared, name: operationDate }
+        output: BSON_DATE
+      /operationText:
+        kind: dateTime
+        source: { kind: shared, name: operationDate }
+        output: STRING
+        pattern: "uuuu-MM-dd'T'HH:mm:ss.SSSX"
+      /generated: { kind: literal, value: true }
+
+  - name: orders
+    count: 3
+    fields:
+      /sequence: { kind: sequence, start: AUTO_AFTER_TARGET_MAX, step: 1 }
+      /_id:
+        kind: concat
+        parts:
+          - { kind: literal, value: "ORD-" }
+          - { kind: ref, path: /sequence }
+      /customerId: { kind: ref, collection: customers, path: /_id }
+      /operationDate:
+        kind: dateTime
+        source: { kind: shared, name: operationDate }
+        output: BSON_DATE
+      /legacyDate:
+        kind: dateTime
+        source: { kind: shared, name: operationDate }
+        output: STRING
+        pattern: "'1'yyMMdd"
+      /generated: { kind: literal, value: true }

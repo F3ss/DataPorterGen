@@ -1,0 +1,134 @@
+version: 1
+seed: 12345
+templateSelection: SHUFFLED_CYCLE
+batchSize: 1000
+parallelism: 2
+maxWorkingMegabytes: 100
+maxInFlightMegabytes: 256
+
+sharedDates:
+  operationDate:
+    kind: randomRange
+    from: 2020-01-01T00:00:00Z
+    to: 2030-01-01T00:00:00Z
+
+collections:
+  - name: customers
+    count: 10000
+    query: { "staticValue": { "$exists": true } }
+    fields:
+      /generatedIdPart:
+        kind: randomString
+        alphabet: ALPHANUMERIC
+        length: 6
+      /_id:
+        kind: concat
+        parts:
+          - { kind: ref, path: /generatedIdPart }
+          - { kind: literal, value: "|" }
+          - { kind: ref, path: /staticValue }
+      /customerId:
+        kind: ref
+        path: /_id
+      /code:
+        kind: randomString
+        alphabet: UPPER_LATIN
+        length: 15
+      /legacyCode:
+        kind: randomAlphaNumStringBetween
+        min: 10000000
+        max: 1000000000
+        length: 6
+      /weightedLegacyCode:
+        kind: weightedChoice
+        choices:
+          - { value: { kind: randomAlphaNumStringBetween, min: 10000000, max: 1000000000, length: 6 }, weight: 500 }
+          - { value: { kind: randomAlphaNumStringBetween, min: 0, max: 392000, length: 6 }, weight: 490 }
+          - { value: { kind: randomAlphaNumStringBetween, min: 1000000, max: 1001800, length: 6 }, weight: 9 }
+          - { value: { kind: randomAlphaNumStringBetween, min: 2000000, max: 2000002, length: 6 }, weight: 1 }
+      /age:
+        kind: randomNumber
+        bsonType: INT32
+        min: 18
+        max: 90
+      /tier:
+        kind: weightedChoice
+        choices:
+          - { value: GOLD, weight: 20 }
+          - { value: SILVER, weight: 80 }
+      /active:
+        kind: randomBoolean
+        trueProbability: 0.8
+      /createdAt:
+        kind: dateTime
+        source: { kind: shared, name: operationDate }
+        output: BSON_DATE
+      /profile:
+        kind: object
+        fields:
+          label:
+            kind: randomString
+            alphabet: ALPHANUMERIC
+            length: 12
+      /tags:
+        kind: array
+        length: { min: 1, max: 4 }
+        items:
+          kind: weightedChoice
+          choices:
+            - { value: new, weight: 50 }
+            - { value: active, weight: 30 }
+            - { value: priority, weight: 20 }
+
+  - name: orders
+    count: 8000
+    fields:
+      /sequence:
+        kind: sequence
+        start: AUTO_AFTER_TARGET_MAX
+        step: 1
+      /orderIdPart:
+        kind: randomString
+        alphabet: ALPHANUMERIC
+        length: 6
+      /_id:
+        kind: concat
+        parts:
+          - { kind: literal, value: "ORD-" }
+          - { kind: ref, collection: customers, path: /generatedIdPart }
+          - { kind: literal, value: "-" }
+          - { kind: ref, path: /sequence }
+          - { kind: literal, value: "-" }
+          - { kind: ref, path: /orderIdPart }
+      /customerId:
+        kind: ref
+        collection: customers
+        path: /_id
+      /externalKey:
+        kind: concat
+        parts:
+          - { kind: ref, collection: customers, path: /code }
+          - { kind: literal, value: "-" }
+          - { kind: ref, path: /sequence }
+      /createdText:
+        kind: dateTime
+        source: { kind: shared, name: operationDate }
+        output: STRING
+        pattern: "uuuu-MM-dd'T'HH:mm:ss.SSSX"
+        zone: UTC
+        locale: ROOT
+      /legacyDate:
+        kind: dateTime
+        source: { kind: shared, name: operationDate }
+        output: STRING
+        pattern: "'1'yyMMdd"
+        zone: UTC
+        locale: ROOT
+      /optionalComment:
+        kind: randomString
+        alphabet: CUSTOM
+        characters: "ABCDEF0123456789"
+        minLength: 8
+        maxLength: 24
+        nullProbability: 0.05
+        omitProbability: 0.10

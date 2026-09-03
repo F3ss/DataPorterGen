@@ -1,0 +1,10 @@
+.git
+.gradle
+.gradle-user
+build
+out
+reports
+*.log
+.idea
+.vscode
+FIRST_PROMT.md

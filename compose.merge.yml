@@ -1,0 +1,102 @@
+name: dataportergen-merge-e2e
+
+services:
+  merge-source:
+    image: mongo:7.0.14
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: source_root_local_only
+      MONGO_INITDB_ROOT_PASSWORD: source_password_local_only
+    volumes:
+      - merge-source-data:/data/db
+      - ./docker/mongo-source-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --quiet --username source_root_local_only --password source_password_local_only --authenticationDatabase admin --eval 'quit(db.adminCommand({ping:1}).ok ? 0 : 1)' || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 15s
+    networks: [merge]
+
+  merge-target:
+    image: mongo:7.0.14
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: target_root_local_only
+      MONGO_INITDB_ROOT_PASSWORD: target_password_local_only
+    volumes:
+      - merge-target-data:/data/db
+      - ./docker/mongo-merge-target-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --quiet --username target_root_local_only --password target_password_local_only --authenticationDatabase admin --eval 'quit(db.adminCommand({ping:1}).ok ? 0 : 1)' || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 15s
+    networks: [merge]
+
+  dataportergen:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        rm -f /app/reports/merge-complete
+        java -jar /app/DataPorterGen.jar
+        touch /app/reports/merge-complete
+        exec tail -f /dev/null
+    environment:
+      SOURCE_MONGODB_URI: mongodb://source_root_local_only:source_password_local_only@merge-source:27017/?authSource=admin
+      SOURCE_DATABASE: source_catalog
+      TARGET_MONGODB_URI: mongodb://target_root_local_only:target_password_local_only@merge-target:27017/?authSource=admin
+      TARGET_DATABASE: merge_catalog
+      TARGET_STRATEGY: MERGE
+      VERIFICATION_LEVEL: FULL
+      MIGRATION_BATCH_SIZE: 2
+      MIGRATION_PARALLELISM: 2
+      INCLUDE_COLLECTIONS: ""
+      EXCLUDE_COLLECTIONS: ""
+      MIGRATION_REPORT_PATH: /app/reports/merge-report.json
+    volumes:
+      - merge-reports:/app/reports
+    depends_on:
+      merge-source:
+        condition: service_healthy
+      merge-target:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /app/reports/merge-complete"]
+      interval: 1s
+      timeout: 1s
+      retries: 120
+      start_period: 1s
+    networks: [merge]
+
+  merge-verifier:
+    image: mongo:7.0.14
+    environment:
+      SOURCE_URI: mongodb://source_root_local_only:source_password_local_only@merge-source:27017/?authSource=admin
+      TARGET_URI: mongodb://target_root_local_only:target_password_local_only@merge-target:27017/?authSource=admin
+      SOURCE_DATABASE: source_catalog
+      TARGET_DATABASE: merge_catalog
+    volumes:
+      - ./docker/merge-verification:/verification:ro
+    entrypoint: ["mongosh", "--nodb", "--quiet", "/verification/verify.js"]
+    depends_on:
+      merge-source:
+        condition: service_healthy
+      merge-target:
+        condition: service_healthy
+      dataportergen:
+        condition: service_healthy
+    networks: [merge]
+
+networks:
+  merge:
+    driver: bridge
+
+volumes:
+  merge-source-data:
+  merge-target-data:
+  merge-reports:

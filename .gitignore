@@ -1,0 +1,6 @@
+.gradle/
+.idea/
+build/
+reports/
+*.log
+FIRST_PROMT.md

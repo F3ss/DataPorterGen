@@ -1,0 +1,37 @@
+spring:
+  application:
+    name: DataPorterGen
+  main:
+    banner-mode: "off"
+    web-application-type: none
+
+migration:
+  mode: ${MIGRATION_MODE:MIGRATE}
+  source:
+    uri: ${SOURCE_MONGODB_URI:}
+    database: ${SOURCE_DATABASE:}
+  target:
+    uri: ${TARGET_MONGODB_URI:}
+    database: ${TARGET_DATABASE:}
+  existing-target-strategy: ${TARGET_STRATEGY:FAIL_IF_EXISTS}
+  consistency-strategy: BASIC
+  batch-size: ${MIGRATION_BATCH_SIZE:1000}
+  parallelism: ${MIGRATION_PARALLELISM:2}
+  verification-enabled: ${VERIFICATION_ENABLED:true}
+  verification-level: ${VERIFICATION_LEVEL:METADATA_AND_COUNTS}
+  include-collections: ${INCLUDE_COLLECTIONS:}
+  exclude-collections: ${EXCLUDE_COLLECTIONS:}
+  continue-on-collection-error: ${CONTINUE_ON_COLLECTION_ERROR:false}
+  report-path: ${MIGRATION_REPORT_PATH:reports/migration-report.json}
+  generation:
+    config-path: ${GENERATION_CONFIG_PATH:./generation.yml}
+    validate-only: ${GENERATION_VALIDATE_ONLY:false}
+    allow-unproven-ids: ${GENERATION_ALLOW_UNPROVEN_IDS:false}
+  retry:
+    max-attempts: ${RETRY_MAX_ATTEMPTS:3}
+    initial-delay: ${RETRY_INITIAL_DELAY:500ms}
+    max-delay: ${RETRY_MAX_DELAY:5s}
+
+logging:
+  pattern:
+    console: "%d{yyyy-MM-dd'T'HH:mm:ss.SSSXXX} %-5level %logger{36} - %msg%n"
