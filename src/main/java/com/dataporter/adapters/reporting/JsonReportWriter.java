@@ -1,5 +1,7 @@
 package com.dataporter.adapters.reporting;
 
+import com.dataporter.generation.domain.GenerationReport;
+import com.dataporter.generation.ports.out.GenerationReportWriter;
 import com.dataporter.migration.domain.MigrationReport;
 import com.dataporter.migration.ports.out.MigrationReportWriter;
 import com.dataporter.shared.error.ConfigurationException;
@@ -11,7 +13,7 @@ import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import java.io.IOException;
 import java.nio.file.*;
 
-public final class JsonReportWriter implements MigrationReportWriter {
+public final class JsonReportWriter implements MigrationReportWriter, GenerationReportWriter {
     private final Path path;
     private final ObjectMapper mapper;
 
@@ -30,11 +32,15 @@ public final class JsonReportWriter implements MigrationReportWriter {
                 Files.deleteIfExists(Files.createTempFile(parent, "dataportergen-report-probe-", ".tmp"));
             }
         } catch (IOException | RuntimeException e) {
-            throw new ConfigurationException("Cannot write migration report to " + path, e);
+            throw new ConfigurationException("Cannot write report to " + path, e);
         }
     }
 
-    public void write(MigrationReport report) {
+    @Override public void write(MigrationReport report) { writeJson(report, "migration report"); }
+
+    @Override public void write(GenerationReport report) { writeJson(report, "generation report"); }
+
+    private void writeJson(Object report, String what) {
         try {
             Path parent = path.getParent();
             if (parent != null) Files.createDirectories(parent);
@@ -43,7 +49,7 @@ public final class JsonReportWriter implements MigrationReportWriter {
             try { Files.move(temporary, path, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE); }
             catch (AtomicMoveNotSupportedException e) { Files.move(temporary, path, StandardCopyOption.REPLACE_EXISTING); }
         } catch (IOException e) {
-            throw new IllegalStateException("Cannot write migration report to " + path, e);
+            throw new IllegalStateException("Cannot write " + what + " to " + path, e);
         }
     }
 }

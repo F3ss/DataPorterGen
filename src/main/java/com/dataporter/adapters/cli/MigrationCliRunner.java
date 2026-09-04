@@ -8,7 +8,6 @@ import com.dataporter.adapters.mongo.MongoGenerationTarget;
 import com.dataporter.adapters.mongo.MongoMigrationTarget;
 import com.dataporter.adapters.mongo.MongoMigrationVerifier;
 import com.dataporter.adapters.mongo.MongoTransientFailureClassifier;
-import com.dataporter.adapters.reporting.JsonGenerationReportWriter;
 import com.dataporter.adapters.reporting.JsonReportWriter;
 import com.dataporter.adapters.snapshot.FileTemplateCatalogFactory;
 import com.dataporter.config.MigrationProperties;
@@ -114,7 +113,7 @@ public final class MigrationCliRunner implements ApplicationRunner {
             GenerationOrchestrator service = new GenerationOrchestrator(source, target,
                     new GenerationConfigReader(properties.generationConfigPath()),
                     new FileTemplateCatalogFactory(), new MongoGenerationBsonEngine(),
-                    new JsonGenerationReportWriter(properties.generationReportPath()),
+                    new JsonReportWriter(properties.generationReportPath()),
                     new LoggingGenerationProgressReporter(), cancelled::get);
             serviceOwnsClients = true;
             exitCode = ExitCodes.from(service.generate(command));

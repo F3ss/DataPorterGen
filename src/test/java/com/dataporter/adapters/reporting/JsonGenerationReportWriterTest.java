@@ -26,7 +26,7 @@ class JsonGenerationReportWriterTest {
                 2, 20, true, 30, ResolvedIdStrategy.explicit(), ObjectStatus.PARTIAL, "password=value")),
                 List.of("mongodb://user:pass@host:27017"), List.of(), false);
 
-        new JsonGenerationReportWriter(output).write(report);
+        new JsonReportWriter(output).write(report);
         String json = Files.readString(output);
         assertThat(json).contains("GENERATE", "\"status\" : \"FAILED\"", "\"errors\" : [",
                         "configHash", "abcdef", "safeToRetry", "password=***",
@@ -38,7 +38,7 @@ class JsonGenerationReportWriterTest {
 
     @Test void prepareFailsFastWhenReportPathIsNotWritable(@TempDir Path temp) throws Exception {
         Files.writeString(temp.resolve("blocking"), "not a directory");
-        JsonGenerationReportWriter writer = new JsonGenerationReportWriter(temp.resolve("blocking").resolve("report.json"));
+        JsonReportWriter writer = new JsonReportWriter(temp.resolve("blocking").resolve("report.json"));
 
         org.assertj.core.api.Assertions.assertThatThrownBy(writer::prepare)
                 .isInstanceOf(com.dataporter.shared.error.ConfigurationException.class)

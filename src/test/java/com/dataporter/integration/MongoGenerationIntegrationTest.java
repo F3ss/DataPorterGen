@@ -4,7 +4,7 @@ import com.dataporter.adapters.config.GenerationConfigReader;
 import com.dataporter.adapters.mongo.MongoGenerationBsonEngine;
 import com.dataporter.adapters.mongo.MongoGenerationSource;
 import com.dataporter.adapters.mongo.MongoGenerationTarget;
-import com.dataporter.adapters.reporting.JsonGenerationReportWriter;
+import com.dataporter.adapters.reporting.JsonReportWriter;
 import com.dataporter.adapters.snapshot.FileTemplateCatalogFactory;
 import com.dataporter.generation.application.GenerationOrchestrator;
 import com.dataporter.generation.domain.GenerationCommand;
@@ -592,7 +592,7 @@ class MongoGenerationIntegrationTest {
         MongoGenerationTarget target = new MongoGenerationTarget(targetEndpoint);
         GenerationOrchestrator service = new GenerationOrchestrator(source, target, new GenerationConfigReader(config),
                 new FileTemplateCatalogFactory(), new MongoGenerationBsonEngine(),
-                new JsonGenerationReportWriter(report), () -> false);
+                new JsonReportWriter(report), () -> false);
         return service.generate(new GenerationCommand(sourceEndpoint, targetEndpoint,
                 new GenerationOptions(validateOnly, allowUnprovenIds)));
     }
