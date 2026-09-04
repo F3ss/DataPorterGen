@@ -27,6 +27,7 @@ migration:
     config-path: ${GENERATION_CONFIG_PATH:./generation.yml}
     validate-only: ${GENERATION_VALIDATE_ONLY:false}
     allow-unproven-ids: ${GENERATION_ALLOW_UNPROVEN_IDS:false}
+    only-configured-fields: ${GENERATION_ONLY_CONFIGURED_FIELDS:false}
   retry:
     max-attempts: ${RETRY_MAX_ATTEMPTS:3}
     initial-delay: ${RETRY_INITIAL_DELAY:500ms}

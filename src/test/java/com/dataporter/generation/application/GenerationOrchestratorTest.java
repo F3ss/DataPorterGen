@@ -149,6 +149,80 @@ class GenerationOrchestratorTest {
         assertThat(target.written).isZero();
     }
 
+    @Test void onlyConfiguredFieldsKeepsConfiguredRefTargetsAndId() {
+        BsonPayload customersTemplate = encode(BsonDocument.parse("{_id: 1, name: 'n', email: 'e', legacy: true}"));
+        BsonPayload ordersTemplate = encode(BsonDocument.parse("{_id: 1, total: 99, note: 'x'}"));
+        Map<String, BsonPayload> templates = Map.of("customers", customersTemplate, "orders", ordersTemplate);
+        GenerationSource source = new GenerationSource() {
+            public void checkConnection() { }
+            public void checkReadable() { }
+            public boolean databaseExists() { return true; }
+            public GenerationSourceInspection inspect() {
+                return new GenerationSourceInspection(List.of("customers", "orders"), List.of());
+            }
+            public BatchCursor openBatches(String collection, int size) { throw new AssertionError("templates come from the catalog"); }
+            public void close() { }
+        };
+        FakeTarget target = new FakeTarget() {
+            @Override public Set<String> ordinaryCollections() { return Set.of("customers", "orders"); }
+            @Override public List<UniqueConstraint> uniqueConstraints(String collection) {
+                return List.of(new UniqueConstraint(collection, "_id_", List.of("/_id"), false, false, false));
+            }
+        };
+        GenerationSpec spec = new GenerationSpec(1, 123L, TemplateSelection.SHUFFLED_CYCLE, 4, 1, 10, 2, Map.of(), List.of(
+                new CollectionGenerationSpec("customers", 2, new LinkedHashMap<>(Map.of(
+                        "/_id", new GenerationRule.ObjectId(RuleOptions.REQUIRED)))),
+                new CollectionGenerationSpec("orders", 2, new LinkedHashMap<>(Map.of(
+                        "/_id", new GenerationRule.ObjectId(RuleOptions.REQUIRED),
+                        "/customerId", new Ref("customers", "/_id", MissingPolicy.ERROR, RuleOptions.REQUIRED))))),
+                "hash");
+        GenerationOrchestrator service = new GenerationOrchestrator(source, target, () -> spec,
+                (ignored, collections, max) -> new TemplateCatalog() {
+                    public long count(String collection) { return 1; }
+                    public long bytes(String collection) { return templates.get(collection).size() + 12; }
+                    public boolean truncated(String collection) { return false; }
+                    public BsonPayload get(String collection, long ordinal) { return templates.get(collection); }
+                    public void close() { }
+                }, new MongoGenerationBsonEngine(), ignored -> {}, () -> false);
+
+        GenerationReport report = service.generate(command(false, false, true));
+
+        assertThat(report.status()).as(report.errors().toString()).isEqualTo(OperationStatus.SUCCESS);
+        List<BsonDocument> customers = new ArrayList<>(), orders = new ArrayList<>();
+        target.payloads.forEach(payload -> {
+            BsonDocument document = new RawBsonDocument(payload.bytes());
+            (document.containsKey("customerId") ? orders : customers).add(document);
+        });
+        assertThat(customers).hasSize(2);
+        assertThat(orders).hasSize(2);
+        for (int iteration = 0; iteration < 2; iteration++) {
+            assertThat(customers.get(iteration).keySet()).containsExactly("_id");
+            assertThat(orders.get(iteration).keySet()).containsExactly("_id", "customerId");
+            assertThat(orders.get(iteration).get("customerId")).isEqualTo(customers.get(iteration).get("_id"));
+        }
+    }
+
+    @Test void keepSetsIncludeRefTargetsIdAndFieldReferenceDetail() {
+        GenerationSpec spec = new GenerationSpec(1, 123L, TemplateSelection.SHUFFLED_CYCLE, 4, 1, 10, 2, Map.of(), List.of(
+                new CollectionGenerationSpec("customers", 2, new LinkedHashMap<>(Map.of(
+                        "/name", new Literal("n", RuleOptions.REQUIRED)))),
+                new CollectionGenerationSpec("orders", 2, new LinkedHashMap<>(Map.of(
+                        "/code", new Ref("customers", "/code", MissingPolicy.ERROR, RuleOptions.REQUIRED),
+                        "/when", new DateTime(new DateRef("customers", "/createdAt"), DateOutput.BSON_DATE,
+                                null, "UTC", "ROOT", RuleOptions.REQUIRED),
+                        "/local", new Ref(null, "/templateField", MissingPolicy.NULL, RuleOptions.REQUIRED))))),
+                "hash");
+        Map<String, com.dataporter.generation.domain.ResolvedIdStrategy> ids = new LinkedHashMap<>();
+        ids.put("customers", new com.dataporter.generation.domain.ResolvedIdStrategy(
+                com.dataporter.generation.domain.ResolvedIdStrategy.Kind.FIELD_REFERENCE, "/sourceId", 0));
+        ids.put("orders", com.dataporter.generation.domain.ResolvedIdStrategy.explicit());
+
+        Map<String, Set<String>> keep = GenerationPreflight.keepSets(spec, ids);
+
+        assertThat(keep.get("customers")).containsExactlyInAnyOrder("/name", "/_id", "/sourceId", "/code", "/createdAt");
+        assertThat(keep.get("orders")).containsExactlyInAnyOrder("/code", "/when", "/local", "/_id", "/templateField");
+    }
+
     private static final class RecordingEngine implements com.dataporter.generation.ports.out.GenerationBsonEngine {
         private final com.dataporter.generation.ports.out.GenerationBsonEngine delegate = new MongoGenerationBsonEngine();
         final List<Integer> batchSizes = java.util.Collections.synchronizedList(new ArrayList<>());
@@ -170,11 +244,11 @@ class GenerationOrchestratorTest {
                 Map<String, GenerationRule> fields, com.dataporter.generation.domain.ResolvedIdStrategy idStrategy,
                 Map<String, BsonPayload> sameIterationDocuments, Map<String, Long> sequenceStarts,
                 Map<String, com.dataporter.generation.domain.SharedDateDefinition> sharedDates,
-                String batchUniqueRandomStringPath, int batchSize) {
+                String batchUniqueRandomStringPath, int batchSize, Set<String> keepPaths) {
             batchSizes.add(batchSize);
             batchPaths.add(batchUniqueRandomStringPath);
             return delegate.generate(collection, iteration, seed, template, fields, idStrategy, sameIterationDocuments,
-                    sequenceStarts, sharedDates, batchUniqueRandomStringPath, batchSize);
+                    sequenceStarts, sharedDates, batchUniqueRandomStringPath, batchSize, keepPaths);
         }
         @Override public BsonPayload constraintKey(BsonPayload document, com.dataporter.generation.domain.UniqueConstraint constraint) { return delegate.constraintKey(document, constraint); }
         @Override public void validateScalarId(BsonPayload document, String collection) { delegate.validateScalarId(document, collection); }
@@ -801,8 +875,12 @@ class GenerationOrchestratorTest {
         return command(validateOnly, false);
     }
     private GenerationCommand command(boolean validateOnly, boolean allowUnprovenIds) {
+        return command(validateOnly, allowUnprovenIds, false);
+    }
+    private GenerationCommand command(boolean validateOnly, boolean allowUnprovenIds, boolean onlyConfiguredFields) {
         Endpoint endpoint = new Endpoint("mongodb://same:27017", "catalog");
-        return new GenerationCommand(endpoint, endpoint, new GenerationOptions(validateOnly, allowUnprovenIds));
+        return new GenerationCommand(endpoint, endpoint,
+                new GenerationOptions(validateOnly, allowUnprovenIds, onlyConfiguredFields));
     }
     private BsonPayload encode(BsonDocument document) {
         RawBsonDocument raw = new RawBsonDocument(document, new BsonDocumentCodec());

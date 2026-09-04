@@ -8,6 +8,7 @@ import com.dataporter.generation.domain.UniqueConstraint;
 import com.dataporter.shared.bson.BsonPayload;
 
 import java.util.Map;
+import java.util.Set;
 
 public interface GenerationBsonEngine {
     TemplateFacts inspect(BsonPayload template);
@@ -25,7 +26,8 @@ public interface GenerationBsonEngine {
                          Map<String, BsonPayload> sameIterationDocuments,
                          Map<String, Long> sequenceStarts,
                          Map<String, SharedDateDefinition> sharedDates,
-                         String batchUniqueRandomStringPath, int batchSize);
+                         String batchUniqueRandomStringPath, int batchSize,
+                         Set<String> keepPaths);
     BsonPayload constraintKey(BsonPayload document, UniqueConstraint constraint);
     void validateScalarId(BsonPayload document, String collection);
 }

@@ -8,9 +8,10 @@ import org.bson.BsonValue;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
-/** JSON Pointer get/set/remove over BSON documents; pointer tokenization is cached per pointer string. */
+/** JSON Pointer get/set/remove/retain over BSON documents; pointer tokenization is cached per pointer string. */
 final class BsonPointerOperations {
     // Pointers are fixed strings from the spec; tokenizing them per set/get/remove call is pure overhead.
     private final Map<String, List<String>> pointerTokensCache = new ConcurrentHashMap<>();
@@ -58,6 +59,37 @@ final class BsonPointerOperations {
         }
         if (parent.isDocument()) parent.asDocument().remove(tokens.getLast());
         else if (parent.isArray()) { int index=arrayIndex(tokens.getLast(),parent.asArray().size()); if(index>=0)parent.asArray().remove(index); }
+    }
+    /** Copies the document keeping only paths in {@code keep} (exact pointer or container of one);
+     * arrays are kept whole because partial retention would retype them and corrupt set/get.
+     * Kept subtrees are aliased, not cloned: callers pass the freshly decoded mutable document
+     * and discard it afterwards. */
+    BsonDocument retain(BsonDocument document, Set<String> keep) {
+        BsonDocument result = new BsonDocument();
+        for (Map.Entry<String, BsonValue> entry : document.entrySet()) {
+            String path = "/" + escape(entry.getKey());
+            if (!kept(path, keep)) continue;
+            if (entry.getValue().isDocument() && !keep.contains(path))
+                result.put(entry.getKey(), retain(entry.getValue().asDocument(), keep, path));
+            else result.put(entry.getKey(), entry.getValue());
+        }
+        return result;
+    }
+    private BsonDocument retain(BsonDocument document, Set<String> keep, String prefix) {
+        BsonDocument result = new BsonDocument();
+        for (Map.Entry<String, BsonValue> entry : document.entrySet()) {
+            String path = prefix + "/" + escape(entry.getKey());
+            if (!kept(path, keep)) continue;
+            if (entry.getValue().isDocument() && !keep.contains(path))
+                result.put(entry.getKey(), retain(entry.getValue().asDocument(), keep, path));
+            else result.put(entry.getKey(), entry.getValue());
+        }
+        return result;
+    }
+    private static boolean kept(String path, Set<String> keep) {
+        if (keep.contains(path)) return true;
+        String prefix = path + "/";
+        return keep.stream().anyMatch(entry -> entry.startsWith(prefix));
     }
     List<String> tokens(String pointer) {
         List<String> cached = pointerTokensCache.get(pointer);

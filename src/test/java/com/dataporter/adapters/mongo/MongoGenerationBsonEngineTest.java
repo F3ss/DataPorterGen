@@ -76,9 +76,9 @@ class MongoGenerationBsonEngineTest {
                         "'1'yyMMdd", "UTC", "ROOT", RuleOptions.REQUIRED));
 
         BsonDocument event = decode(engine.generate("events", 7, 99, template, eventFields,
-                ResolvedIdStrategy.explicit(), Map.of(), Map.of(), sharedDates, null, 1));
+                ResolvedIdStrategy.explicit(), Map.of(), Map.of(), sharedDates, null, 1, null));
         BsonDocument legacy = decode(engine.generate("legacyEvents", 7, 99, template, legacyFields,
-                ResolvedIdStrategy.explicit(), Map.of(), Map.of(), sharedDates, null, 1));
+                ResolvedIdStrategy.explicit(), Map.of(), Map.of(), sharedDates, null, 1, null));
 
         assertThat(event.getDateTime("createdAt").getValue()).isEqualTo(1_788_344_430_123L);
         assertThat(event.getString("createdText").getValue()).isEqualTo("2026-09-02T10:20:30.123Z");
@@ -97,13 +97,13 @@ class MongoGenerationBsonEngineTest {
                 new SharedDateRef("operationDate"), DateOutput.BSON_DATE, null, "UTC", "ROOT", RuleOptions.REQUIRED));
 
         BsonDocument first = decode(engine.generate("first", 42, 123, template, firstFields,
-                ResolvedIdStrategy.explicit(), Map.of(), Map.of(), sharedDates, null, 1));
+                ResolvedIdStrategy.explicit(), Map.of(), Map.of(), sharedDates, null, 1, null));
         BsonDocument second = decode(engine.generate("second", 42, 123, template, secondFields,
-                ResolvedIdStrategy.explicit(), Map.of(), Map.of(), sharedDates, null, 1));
+                ResolvedIdStrategy.explicit(), Map.of(), Map.of(), sharedDates, null, 1, null));
         BsonDocument repeated = decode(engine.generate("second", 42, 123, template, secondFields,
-                ResolvedIdStrategy.explicit(), Map.of(), Map.of(), sharedDates, null, 1));
+                ResolvedIdStrategy.explicit(), Map.of(), Map.of(), sharedDates, null, 1, null));
         BsonDocument nextIteration = decode(engine.generate("second", 43, 123, template, secondFields,
-                ResolvedIdStrategy.explicit(), Map.of(), Map.of(), sharedDates, null, 1));
+                ResolvedIdStrategy.explicit(), Map.of(), Map.of(), sharedDates, null, 1, null));
 
         assertThat(first.getDateTime("first").getValue()).isEqualTo(second.getDateTime("second").getValue());
         assertThat(repeated.getDateTime("second")).isEqualTo(second.getDateTime("second"));
@@ -303,6 +303,40 @@ class MongoGenerationBsonEngineTest {
         assertThat(sawNull).isTrue();
         assertThat(sawOmitted).isTrue();
         assertThat(sawValue).isTrue();
+    }
+
+    @Test void prunesTemplateToKeepPathsBeforeRules() {
+        var engine = new MongoGenerationBsonEngine();
+        BsonPayload template = encode(BsonDocument.parse(
+                "{_id: 1, keep: 7, drop: 'x', nested: {a: 1, b: 2}, arr: [1, 2]}"));
+        Map<String,GenerationRule> fields = Map.of("/keep", new Literal(9, RuleOptions.REQUIRED));
+        Set<String> keep = new LinkedHashSet<>(List.of("/_id", "/keep", "/nested/a"));
+
+        BsonDocument pruned = decode(engine.generate("items", 0, 99, template, fields,
+                ResolvedIdStrategy.explicit(), Map.of(), Map.of(), Map.of(), null, 1, keep));
+
+        assertThat(pruned.keySet()).containsExactly("_id", "keep", "nested");
+        assertThat(pruned.get("keep")).isEqualTo(new BsonInt32(9));
+        assertThat(pruned.getDocument("nested").keySet()).containsExactly("a");
+    }
+
+    @Test void keepPathInsideArrayKeepsTheWholeArrayAndNullKeepPathIsByteIdentical() {
+        var engine = new MongoGenerationBsonEngine();
+        BsonPayload template = encode(BsonDocument.parse(
+                "{_id: 1, keep: 7, drop: 'x', nested: {a: 1, b: 2}, arr: [1, 2]}"));
+        Map<String,GenerationRule> fields = Map.of("/keep", new Literal(9, RuleOptions.REQUIRED));
+
+        BsonDocument array = decode(engine.generate("items", 0, 99, template, fields,
+                ResolvedIdStrategy.explicit(), Map.of(), Map.of(), Map.of(), null, 1,
+                new LinkedHashSet<>(List.of("/_id", "/arr/1"))));
+        assertThat(array.keySet()).containsExactly("_id", "arr", "keep");
+        assertThat(array.getArray("arr")).isEqualTo(new BsonArray(List.of(new BsonInt32(1), new BsonInt32(2))));
+
+        BsonPayload nullable = engine.generate("items", 0, 99, template, fields,
+                ResolvedIdStrategy.explicit(), Map.of(), Map.of(), Map.of(), null, 1, null);
+        BsonPayload legacy = engine.generate("items", 0, 99, template, fields,
+                ResolvedIdStrategy.explicit(), Map.of(), Map.of());
+        assertThat(nullable.bytes()).containsExactly(legacy.bytes());
     }
 
     private RandomAlphaNumStringBetween alphaNum(long min, long max) {

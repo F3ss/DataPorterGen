@@ -85,6 +85,8 @@ public final class GenerationOrchestrator {
         Map<String,GenerationPreflight.RandomStringId> randomStringIds = new LinkedHashMap<>();
         Map<String,IdRandomnessAnalyzer.Analysis> randomAnalyses = new LinkedHashMap<>();
         Map<String,List<com.dataporter.generation.domain.UniqueConstraint>> constraints = new LinkedHashMap<>();
+        // Empty when the flag is off: a null keep-set reaches the engine so output stays byte-identical.
+        Map<String,Set<String>> keepSets = new LinkedHashMap<>();
         Map<String,Long> sequenceStarts = new ConcurrentHashMap<>(); Map<String,GenerationCounters> counters = new LinkedHashMap<>();
         AtomicBoolean writeAttempted = new AtomicBoolean(); OperationStatus status = OperationStatus.SUCCESS;
         String[] stage = {"STARTUP"};
@@ -125,13 +127,16 @@ public final class GenerationOrchestrator {
             timed(stage, STAGES.get(8), durations, () -> {
                 preflight.validateUniqueConstraints(spec[0], ids, randomStringIds, randomAnalyses,
                         command.options().allowUnprovenIds(), constraints);
-                preflight.coverage(spec[0], seed[0], catalog[0], ids, randomStringIds, sequenceStarts, id);
+                if (command.options().onlyConfiguredFields()) keepSets.putAll(GenerationPreflight.keepSets(spec[0], ids));
+                preflight.coverage(spec[0], seed[0], catalog[0], ids, randomStringIds, sequenceStarts,
+                        keepSets.isEmpty() ? null : keepSets, id);
             });
             preWriteWarnings.forEach(warning -> progress.warning(id, warning));
             if (!command.options().validateOnly()) {
                 timed(stage, STAGES.get(9), durations, target::checkWritable);
                 timed(stage, STAGES.get(10), durations, () -> executor.upsert(spec[0], seed[0], catalog[0], ids,
-                        randomStringIds, sequenceStarts, constraints, counters, writeAttempted, id));
+                        randomStringIds, sequenceStarts, keepSets.isEmpty() ? null : keepSets,
+                        constraints, counters, writeAttempted, id));
             } else {
                 durations.put(STAGES.get(9), 0L); durations.put(STAGES.get(10), 0L);
             }

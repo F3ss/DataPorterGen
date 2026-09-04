@@ -32,7 +32,7 @@ final class GenerationBatchExecutor {
 
     void upsert(GenerationSpec spec, long seed, TemplateCatalog catalog,
                 Map<String,ResolvedIdStrategy> ids, Map<String,GenerationPreflight.RandomStringId> randomStringIds,
-                Map<String,Long> starts,
+                Map<String,Long> starts, Map<String,Set<String>> keepSets,
                 Map<String,List<UniqueConstraint>> constraints,
                 Map<String,GenerationCounters> counters, AtomicBoolean writeAttempted, String generationId) {
         long iterations = spec.collections().stream().mapToLong(CollectionGenerationSpec::count).max().orElse(0);
@@ -47,7 +47,7 @@ final class GenerationBatchExecutor {
         long submitted = 0, received = 0, documents = 0;
         try {
             while (submitted < Math.min(blocks, capacity))
-                completed.submit(blockTask(spec, seed, catalog, ids, randomStringIds, starts, secondaryConstraints,
+                completed.submit(blockTask(spec, seed, catalog, ids, randomStringIds, starts, keepSets, secondaryConstraints,
                         submitted++ * spec.batchSize(), iterations, writeAttempted));
             while (received < blocks) {
                 checkCancelled(); Block result;
@@ -63,7 +63,7 @@ final class GenerationBatchExecutor {
                 received++;
                 progress.progress(generationId, GenerationOrchestrator.STAGES.get(10), documents, plannedDocuments);
                 if (submitted < blocks)
-                    completed.submit(blockTask(spec, seed, catalog, ids, randomStringIds, starts, secondaryConstraints,
+                    completed.submit(blockTask(spec, seed, catalog, ids, randomStringIds, starts, keepSets, secondaryConstraints,
                             submitted++ * spec.batchSize(), iterations, writeAttempted));
             }
         } finally {
@@ -73,7 +73,7 @@ final class GenerationBatchExecutor {
     }
     private Callable<Block> blockTask(GenerationSpec spec,long seed,TemplateCatalog catalog,
                                       Map<String,ResolvedIdStrategy> ids,Map<String,GenerationPreflight.RandomStringId> randomStringIds,
-                                      Map<String,Long> starts,Map<String,List<UniqueConstraint>> secondaryConstraints,
+                                      Map<String,Long> starts,Map<String,Set<String>> keepSets,Map<String,List<UniqueConstraint>> secondaryConstraints,
                                       long blockStart,long iterations,AtomicBoolean writeAttempted) {
         return () -> {
             long blockEnd = Math.min(blockStart + spec.batchSize(), iterations);
@@ -101,7 +101,7 @@ final class GenerationBatchExecutor {
                     BsonPayload payload = bson.generate(collection.name(), iteration, seed,
                             selectedTemplate(spec, seed, catalog, collection.name(), iteration), collection.fields(),
                             item.idStrategy(), current, starts, spec.sharedDates(), item.batchUniquePath(),
-                            item.batchCapacity());
+                            item.batchCapacity(), keepSets == null ? null : keepSets.get(collection.name()));
                     if (payload.size() > totalBudgetBytes)
                         throw new GenerationException("Generated document for " + collection.name()
                                 + " (" + payload.size() + " bytes) exceeds maxInFlightMegabytes="

@@ -316,9 +316,35 @@ final class GenerationPreflight {
         return false;
     }
 
+    // Paths each collection must retain in only-configured-fields mode: configured field rules,
+    // /_id, ref/DateRef targets (local and cross-collection; a local ref may read a template path
+    // with no configured provider), and the FIELD_REFERENCE source of an auto-resolved _id.
+    // Cross-collection refs target earlier collections only (validated), so one pass suffices.
+    static Map<String,Set<String>> keepSets(GenerationSpec spec, Map<String,ResolvedIdStrategy> ids) {
+        Map<String,Set<String>> keep = new LinkedHashMap<>();
+        for (CollectionGenerationSpec collection : spec.collections())
+            keep.put(collection.name(), new LinkedHashSet<>(collection.fields().keySet()));
+        for (CollectionGenerationSpec collection : spec.collections()) {
+            keep.get(collection.name()).add("/_id");
+            ResolvedIdStrategy strategy = ids.get(collection.name());
+            if (strategy.kind() == ResolvedIdStrategy.Kind.FIELD_REFERENCE) keep.get(collection.name()).add(strategy.detail());
+            collection.fields().values().forEach(rule -> collectRefTargets(rule, collection.name(), keep));
+        }
+        return keep;
+    }
+    private static void collectRefTargets(GenerationRule rule, String owner, Map<String,Set<String>> keep) {
+        if (rule instanceof Ref ref) keep.get(ref.collection() == null ? owner : ref.collection()).add(ref.path());
+        else if (rule instanceof DateTime date && date.source() instanceof DateRef ref)
+            keep.get(ref.collection() == null ? owner : ref.collection()).add(ref.path());
+        else if (rule instanceof Concat concat) concat.parts().forEach(part -> collectRefTargets(part, owner, keep));
+        else if (rule instanceof WeightedChoice choice) choice.choices().forEach(item -> collectRefTargets(item.value(), owner, keep));
+        else if (rule instanceof Array array) collectRefTargets(array.items(), owner, keep);
+        else if (rule instanceof ObjectValue object) object.fields().values().forEach(value -> collectRefTargets(value, owner, keep));
+    }
+
     void coverage(GenerationSpec spec, long seed, TemplateCatalog catalog,
                   Map<String,ResolvedIdStrategy> ids, Map<String,RandomStringId> randomStringIds,
-                  Map<String,Long> starts, String generationId) {
+                  Map<String,Long> starts, Map<String,Set<String>> keepSets, String generationId) {
         long iterations = spec.collections().stream().mapToLong(c -> catalog.count(c.name())).max().orElse(0);
         if (iterations == 0) return;
         Map<String,Map<String,GenerationRule>> coverageFields = new LinkedHashMap<>();
@@ -327,7 +353,7 @@ final class GenerationPreflight {
         long chunkSize = Math.max(1, spec.batchSize());
         List<Callable<Long>> chunks = new ArrayList<>();
         for (long start = 0; start < iterations; start += chunkSize)
-            chunks.add(coverageChunk(spec, seed, catalog, ids, randomStringIds, starts, coverageFields,
+            chunks.add(coverageChunk(spec, seed, catalog, ids, randomStringIds, starts, keepSets, coverageFields,
                     start, Math.min(start + chunkSize, iterations)));
         // Values are coordinate-derived, so chunk order cannot change them; futures are scanned in
         // chunk order so the reported failure is the same first failing iteration as a sequential run.
@@ -352,7 +378,7 @@ final class GenerationPreflight {
 
     private Callable<Long> coverageChunk(GenerationSpec spec, long seed, TemplateCatalog catalog,
                                          Map<String,ResolvedIdStrategy> ids, Map<String,RandomStringId> randomStringIds,
-                                         Map<String,Long> starts,
+                                         Map<String,Long> starts, Map<String,Set<String>> keepSets,
                                          Map<String,Map<String,GenerationRule>> coverageFields, long start, long end) {
         return () -> {
             Map<String,BsonPayload> current = new LinkedHashMap<>();
@@ -367,7 +393,8 @@ final class GenerationPreflight {
                             coverageFields.get(collection.name()), ids.get(collection.name()), current, starts,
                             spec.sharedDates(),
                             Optional.ofNullable(randomStringIds.get(collection.name())).map(RandomStringId::path).orElse(null),
-                            Math.toIntExact(Math.max(1, Math.min(collection.count(), spec.batchSize())))));
+                            Math.toIntExact(Math.max(1, Math.min(collection.count(), spec.batchSize()))),
+                            keepSets == null ? null : keepSets.get(collection.name())));
                 for (BsonPayload payload : current.values())
                     if (payload.size() > spec.maxInFlightMegabytes() * 1024L * 1024L)
                         throw new GenerationException("Generated document for iteration " + iteration

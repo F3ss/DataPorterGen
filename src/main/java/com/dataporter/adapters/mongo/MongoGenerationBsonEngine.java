@@ -14,6 +14,7 @@ import org.bson.BsonNull;
 import org.bson.BsonValue;
 
 import java.util.Map;
+import java.util.Set;
 
 public final class MongoGenerationBsonEngine implements GenerationBsonEngine {
     private static final int MAX_BSON_BYTES = 16 * 1024 * 1024;
@@ -30,7 +31,7 @@ public final class MongoGenerationBsonEngine implements GenerationBsonEngine {
                                          Map<String, BsonPayload> sameIterationDocuments,
                                          Map<String, Long> sequenceStarts) {
         return generate(collection, iteration, seed, template, fields, idStrategy, sameIterationDocuments,
-                sequenceStarts, Map.of(), null, 1);
+                sequenceStarts, Map.of(), null, 1, null);
     }
 
     @Override public BsonPayload generate(String collection, long iteration, long seed, BsonPayload template,
@@ -39,7 +40,7 @@ public final class MongoGenerationBsonEngine implements GenerationBsonEngine {
                                          Map<String, Long> sequenceStarts,
                                          String batchUniqueRandomStringPath, int batchSize) {
         return generate(collection, iteration, seed, template, fields, idStrategy, sameIterationDocuments,
-                sequenceStarts, Map.of(), batchUniqueRandomStringPath, batchSize);
+                sequenceStarts, Map.of(), batchUniqueRandomStringPath, batchSize, null);
     }
 
     @Override public BsonPayload generate(String collection, long iteration, long seed, BsonPayload template,
@@ -47,9 +48,11 @@ public final class MongoGenerationBsonEngine implements GenerationBsonEngine {
                                          Map<String, BsonPayload> sameIterationDocuments,
                                          Map<String, Long> sequenceStarts,
                                          Map<String, SharedDateDefinition> sharedDates,
-                                         String batchUniqueRandomStringPath, int batchSize) {
+                                         String batchUniqueRandomStringPath, int batchSize,
+                                         Set<String> keepPaths) {
         try {
             BsonDocument document = MongoBson.decodeMutable(template);
+            if (keepPaths != null) document = paths.retain(document, keepPaths);
             for (String path : evaluator.cachedEvaluationOrder(fields)) {
                 Object value = evaluator.evaluate(fields.get(path), collection, iteration, seed, path, document,
                         sameIterationDocuments, sequenceStarts, sharedDates,

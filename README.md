@@ -178,6 +178,7 @@ Spring Boot также читает [application.yml](src/main/resources/applica
 | `migration.generation.config-path` | `GENERATION_CONFIG_PATH` | `./generation.yml` |
 | `migration.generation.validate-only` | `GENERATION_VALIDATE_ONLY` | `false` |
 | `migration.generation.allow-unproven-ids` | `GENERATION_ALLOW_UNPROVEN_IDS` | `false` |
+| `migration.generation.only-configured-fields` | `GENERATION_ONLY_CONFIGURED_FIELDS` | `false` |
 
 Краткая справка CLI доступна через `java -jar ... --help`. Некорректные или пустые точки подключения, системные базы данных, небезопасная миграция в ту же базу того же кластера, недопустимые границы и неизвестные enum-значения приводят к завершению до создания любого клиента базы данных. Принадлежность одному кластеру определяется нормализацией endpoints (нижний регистр хостов, подстановка порта `27017` по умолчанию, нечувствительность к порядку seed-списка и query-строке), а после подключения цели — дополнительно пересечением разрешённых адресов серверов топологии, что распознаёт алиасы вроде `localhost` и `127.0.0.1`, варианты `mongodb://`/`mongodb+srv://` и частично совпадающие seed-списки реплик. В обоих случаях ошибка классифицируется как конфигурационная (код 2) и происходит до любых изменений цели.
 

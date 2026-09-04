@@ -59,7 +59,8 @@ class MigrationPropertiesTest {
                 "migration.target.database", "catalog",
                 "migration.generation.config-path", "custom.yml",
                 "migration.generation.validate-only", "true",
-                "migration.generation.allow-unproven-ids", "true"));
+                "migration.generation.allow-unproven-ids", "true",
+                "migration.generation.only-configured-fields", "true"));
         MigrationProperties properties = new Binder(source).bind("migration", Bindable.of(MigrationProperties.class))
                 .orElseThrow(() -> new AssertionError("generation properties were not bound"));
 
@@ -67,11 +68,13 @@ class MigrationPropertiesTest {
         assertThat(properties.generationConfigPath()).isEqualTo(Path.of("custom.yml"));
         assertThat(properties.toGenerationCommand().options().validateOnly()).isTrue();
         assertThat(properties.toGenerationCommand().options().allowUnprovenIds()).isTrue();
+        assertThat(properties.toGenerationCommand().options().onlyConfiguredFields()).isTrue();
         assertThat(properties.generationReportPath()).isEqualTo(Path.of("reports/generation-report.json"));
     }
 
     @Test void generationDefaultsToProvenIdsOnly() {
         assertThat(configuredProperties().toGenerationCommand().options().allowUnprovenIds()).isFalse();
+        assertThat(configuredProperties().toGenerationCommand().options().onlyConfiguredFields()).isFalse();
     }
 
     private MigrationProperties configuredProperties() {
