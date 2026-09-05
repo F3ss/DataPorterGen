@@ -82,6 +82,7 @@ collections:
 
   - name: orders
     count: 8000
+    # unconfiguredFields: OMIT   # SNAPSHOT | OMIT | DEFAULTS | RANDOM — что делать с полями шаблона, которых нет в fields
     fields:
       /sequence:
         kind: sequence

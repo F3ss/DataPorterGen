@@ -8,6 +8,7 @@ import com.dataporter.generation.domain.GenerationSpec;
 import com.dataporter.generation.domain.ResolvedIdStrategy;
 import com.dataporter.generation.domain.TemplateFacts;
 import com.dataporter.generation.domain.UniqueConstraint;
+import com.dataporter.generation.domain.UnconfiguredFields;
 import com.dataporter.generation.domain.error.GenerationException;
 import com.dataporter.generation.ports.out.GenerationBsonEngine;
 import com.dataporter.generation.ports.out.GenerationProgressReporter;
@@ -316,30 +317,40 @@ final class GenerationPreflight {
         return false;
     }
 
-    // Paths each collection must retain in only-configured-fields mode: configured field rules,
+    // Paths each non-SNAPSHOT collection must keep from its template: configured field rules,
     // /_id, ref/DateRef targets (local and cross-collection; a local ref may read a template path
     // with no configured provider), and the FIELD_REFERENCE source of an auto-resolved _id.
     // Cross-collection refs target earlier collections only (validated), so one pass suffices.
+    // Kept paths hold real values in every mode (OMIT prunes the rest, DEFAULTS/RANDOM replace it),
+    // so rules keep reading template values through refs. SNAPSHOT collections keep everything
+    // already and are absent from the map; ref targets pointing at them are skipped for that reason.
     static Map<String,Set<String>> keepSets(GenerationSpec spec, Map<String,ResolvedIdStrategy> ids) {
         Map<String,Set<String>> keep = new LinkedHashMap<>();
         for (CollectionGenerationSpec collection : spec.collections())
-            keep.put(collection.name(), new LinkedHashSet<>(collection.fields().keySet()));
+            if (collection.unconfiguredFields() != UnconfiguredFields.SNAPSHOT)
+                keep.put(collection.name(), new LinkedHashSet<>(collection.fields().keySet()));
         for (CollectionGenerationSpec collection : spec.collections()) {
-            keep.get(collection.name()).add("/_id");
+            Set<String> paths = keep.get(collection.name());
+            if (paths == null) continue;
+            paths.add("/_id");
             ResolvedIdStrategy strategy = ids.get(collection.name());
-            if (strategy.kind() == ResolvedIdStrategy.Kind.FIELD_REFERENCE) keep.get(collection.name()).add(strategy.detail());
+            if (strategy.kind() == ResolvedIdStrategy.Kind.FIELD_REFERENCE) paths.add(strategy.detail());
             collection.fields().values().forEach(rule -> collectRefTargets(rule, collection.name(), keep));
         }
         return keep;
     }
     private static void collectRefTargets(GenerationRule rule, String owner, Map<String,Set<String>> keep) {
-        if (rule instanceof Ref ref) keep.get(ref.collection() == null ? owner : ref.collection()).add(ref.path());
+        if (rule instanceof Ref ref) addTarget(ref.collection() == null ? owner : ref.collection(), ref.path(), keep);
         else if (rule instanceof DateTime date && date.source() instanceof DateRef ref)
-            keep.get(ref.collection() == null ? owner : ref.collection()).add(ref.path());
+            addTarget(ref.collection() == null ? owner : ref.collection(), ref.path(), keep);
         else if (rule instanceof Concat concat) concat.parts().forEach(part -> collectRefTargets(part, owner, keep));
         else if (rule instanceof WeightedChoice choice) choice.choices().forEach(item -> collectRefTargets(item.value(), owner, keep));
         else if (rule instanceof Array array) collectRefTargets(array.items(), owner, keep);
         else if (rule instanceof ObjectValue object) object.fields().values().forEach(value -> collectRefTargets(value, owner, keep));
+    }
+    private static void addTarget(String collection, String path, Map<String,Set<String>> keep) {
+        Set<String> paths = keep.get(collection);
+        if (paths != null) paths.add(path);
     }
 
     void coverage(GenerationSpec spec, long seed, TemplateCatalog catalog,
@@ -394,7 +405,7 @@ final class GenerationPreflight {
                             spec.sharedDates(),
                             Optional.ofNullable(randomStringIds.get(collection.name())).map(RandomStringId::path).orElse(null),
                             Math.toIntExact(Math.max(1, Math.min(collection.count(), spec.batchSize()))),
-                            keepSets == null ? null : keepSets.get(collection.name())));
+                            keepSets == null ? null : keepSets.get(collection.name()), collection.unconfiguredFields()));
                 for (BsonPayload payload : current.values())
                     if (payload.size() > spec.maxInFlightMegabytes() * 1024L * 1024L)
                         throw new GenerationException("Generated document for iteration " + iteration

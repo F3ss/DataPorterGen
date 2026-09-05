@@ -2,8 +2,9 @@ package com.dataporter.adapters.mongo;
 
 import com.dataporter.generation.domain.error.GenerationException;
 
-import org.bson.BsonDocument;
-import org.bson.BsonValue;
+import org.bson.*;
+import org.bson.types.Decimal128;
+import org.bson.types.ObjectId;
 
 import java.util.Arrays;
 import java.util.List;
@@ -86,7 +87,41 @@ final class BsonPointerOperations {
         }
         return result;
     }
-    private static boolean kept(String path, Set<String> keep) {
+    /** Copies the document replacing every unkept value with the default of its BSON type:
+     * documents keep their keys with defaulted leaves, unkept arrays become empty, arrays
+     * containing a kept path stay whole (mirroring retain). Kept subtrees are aliased, not cloned. */
+    BsonDocument blank(BsonDocument document, Set<String> keep) { return blank(document, keep, ""); }
+    private BsonDocument blank(BsonDocument document, Set<String> keep, String prefix) {
+        BsonDocument result = new BsonDocument();
+        for (Map.Entry<String, BsonValue> entry : document.entrySet()) {
+            String path = prefix + "/" + escape(entry.getKey());
+            if (entry.getValue().isDocument() && !keep.contains(path))
+                result.put(entry.getKey(), blank(entry.getValue().asDocument(), keep, path));
+            else if (kept(path, keep)) result.put(entry.getKey(), entry.getValue());
+            else result.put(entry.getKey(), defaultValue(entry.getValue()));
+        }
+        return result;
+    }
+    static BsonValue defaultValue(BsonValue value) {
+        if (value.isArray()) return new BsonArray();
+        if (value.isString()) return new BsonString("");
+        if (value.isBoolean()) return BsonBoolean.FALSE;
+        if (value.isInt32()) return new BsonInt32(0);
+        if (value.isInt64()) return new BsonInt64(0);
+        if (value.isDouble()) return new BsonDouble(0.0);
+        if (value.isDecimal128()) return new BsonDecimal128(new Decimal128(java.math.BigDecimal.ZERO));
+        if (value.isDateTime()) return new BsonDateTime(0);
+        if (value.isTimestamp()) return new BsonTimestamp(0);
+        if (value.isObjectId()) return new BsonObjectId(new ObjectId(new byte[12]));
+        if (value.isBinary()) return new BsonBinary(new byte[0]);
+        if (value.isSymbol()) return new BsonSymbol("");
+        if (value.isRegularExpression()) return new BsonRegularExpression("");
+        if (value.isJavaScript()) return new BsonJavaScript("");
+        if (value.isJavaScriptWithScope()) return new BsonJavaScriptWithScope("", new BsonDocument());
+        if (value.isNull() || value instanceof BsonMinKey || value instanceof BsonMaxKey) return value;
+        return BsonNull.VALUE;
+    }
+    static boolean kept(String path, Set<String> keep) {
         if (keep.contains(path)) return true;
         String prefix = path + "/";
         return keep.stream().anyMatch(entry -> entry.startsWith(prefix));

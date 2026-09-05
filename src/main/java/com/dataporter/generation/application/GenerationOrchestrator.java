@@ -85,7 +85,7 @@ public final class GenerationOrchestrator {
         Map<String,GenerationPreflight.RandomStringId> randomStringIds = new LinkedHashMap<>();
         Map<String,IdRandomnessAnalyzer.Analysis> randomAnalyses = new LinkedHashMap<>();
         Map<String,List<com.dataporter.generation.domain.UniqueConstraint>> constraints = new LinkedHashMap<>();
-        // Empty when the flag is off: a null keep-set reaches the engine so output stays byte-identical.
+        // Empty when every collection uses SNAPSHOT: a null keep-set reaches the engine so output stays byte-identical.
         Map<String,Set<String>> keepSets = new LinkedHashMap<>();
         Map<String,Long> sequenceStarts = new ConcurrentHashMap<>(); Map<String,GenerationCounters> counters = new LinkedHashMap<>();
         AtomicBoolean writeAttempted = new AtomicBoolean(); OperationStatus status = OperationStatus.SUCCESS;
@@ -127,7 +127,7 @@ public final class GenerationOrchestrator {
             timed(stage, STAGES.get(8), durations, () -> {
                 preflight.validateUniqueConstraints(spec[0], ids, randomStringIds, randomAnalyses,
                         command.options().allowUnprovenIds(), constraints);
-                if (command.options().onlyConfiguredFields()) keepSets.putAll(GenerationPreflight.keepSets(spec[0], ids));
+                keepSets.putAll(GenerationPreflight.keepSets(spec[0], ids));
                 preflight.coverage(spec[0], seed[0], catalog[0], ids, randomStringIds, sequenceStarts,
                         keepSets.isEmpty() ? null : keepSets, id);
             });

@@ -5,6 +5,7 @@ import com.dataporter.generation.domain.ResolvedIdStrategy;
 import com.dataporter.generation.domain.SharedDateDefinition;
 import com.dataporter.generation.domain.TemplateFacts;
 import com.dataporter.generation.domain.UniqueConstraint;
+import com.dataporter.generation.domain.UnconfiguredFields;
 import com.dataporter.shared.bson.BsonPayload;
 
 import java.util.Map;
@@ -27,7 +28,7 @@ public interface GenerationBsonEngine {
                          Map<String, Long> sequenceStarts,
                          Map<String, SharedDateDefinition> sharedDates,
                          String batchUniqueRandomStringPath, int batchSize,
-                         Set<String> keepPaths);
+                         Set<String> keepPaths, UnconfiguredFields unconfiguredFields);
     BsonPayload constraintKey(BsonPayload document, UniqueConstraint constraint);
     void validateScalarId(BsonPayload document, String collection);
 }

@@ -101,7 +101,8 @@ final class GenerationBatchExecutor {
                     BsonPayload payload = bson.generate(collection.name(), iteration, seed,
                             selectedTemplate(spec, seed, catalog, collection.name(), iteration), collection.fields(),
                             item.idStrategy(), current, starts, spec.sharedDates(), item.batchUniquePath(),
-                            item.batchCapacity(), keepSets == null ? null : keepSets.get(collection.name()));
+                            item.batchCapacity(), keepSets == null ? null : keepSets.get(collection.name()),
+                            collection.unconfiguredFields());
                     if (payload.size() > totalBudgetBytes)
                         throw new GenerationException("Generated document for " + collection.name()
                                 + " (" + payload.size() + " bytes) exceeds maxInFlightMegabytes="

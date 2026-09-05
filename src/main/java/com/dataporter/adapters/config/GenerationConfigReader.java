@@ -7,6 +7,7 @@ import com.dataporter.generation.domain.GenerationSpec;
 import com.dataporter.generation.domain.SharedDateDefinition;
 import com.dataporter.generation.domain.TemplateQuery;
 import com.dataporter.generation.domain.TemplateSelection;
+import com.dataporter.generation.domain.UnconfiguredFields;
 import com.dataporter.generation.ports.out.GenerationSpecReader;
 import com.dataporter.shared.error.ConfigurationException;
 
@@ -68,10 +69,12 @@ public final class GenerationConfigReader implements GenerationSpecReader {
                 JsonNode node = collectionNodes.get(i);
                 String at = "collections[" + i + "]";
                 requireObject(node, at);
-                unknown(node, at, "name", "count", "query", "fields");
+                unknown(node, at, "name", "count", "query", "fields", "unconfiguredFields");
                 String name = requiredText(node, "name", at);
                 if (!names.add(name)) fail("duplicate generation collection: " + name);
                 long count = requiredLong(node, "count", at);
+                UnconfiguredFields unconfiguredFields = enumValue(UnconfiguredFields.class,
+                        optionalText(node, "unconfiguredFields", "SNAPSHOT", at), at + ".unconfiguredFields");
                 TemplateQuery query = node.has("query")
                         ? parseTemplateQuery(node.get("query"), at + ".query")
                         : TemplateQuery.matchAll();
@@ -79,7 +82,7 @@ public final class GenerationConfigReader implements GenerationSpecReader {
                 requireObject(fieldNodes, at + ".fields");
                 LinkedHashMap<String, GenerationRule> fields = new LinkedHashMap<>();
                 fieldNodes.properties().forEach(entry -> fields.put(entry.getKey(), parseRule(entry.getValue(), at + ".fields." + entry.getKey())));
-                collections.add(new CollectionGenerationSpec(name, count, query, fields));
+                collections.add(new CollectionGenerationSpec(name, count, query, fields, unconfiguredFields));
             }
             return new GenerationSpec(version, seed, templateSelection, batchSize, parallelism, working, inFlight,
                     sharedDates, collections, sha256(content));

@@ -5,6 +5,7 @@ import com.dataporter.generation.domain.ResolvedIdStrategy;
 import com.dataporter.generation.domain.SharedDateDefinition;
 import com.dataporter.generation.domain.TemplateFacts;
 import com.dataporter.generation.domain.UniqueConstraint;
+import com.dataporter.generation.domain.UnconfiguredFields;
 import com.dataporter.generation.domain.error.GenerationException;
 import com.dataporter.generation.ports.out.GenerationBsonEngine;
 import com.dataporter.shared.bson.BsonPayload;
@@ -31,7 +32,7 @@ public final class MongoGenerationBsonEngine implements GenerationBsonEngine {
                                          Map<String, BsonPayload> sameIterationDocuments,
                                          Map<String, Long> sequenceStarts) {
         return generate(collection, iteration, seed, template, fields, idStrategy, sameIterationDocuments,
-                sequenceStarts, Map.of(), null, 1, null);
+                sequenceStarts, Map.of(), null, 1, null, UnconfiguredFields.SNAPSHOT);
     }
 
     @Override public BsonPayload generate(String collection, long iteration, long seed, BsonPayload template,
@@ -40,7 +41,7 @@ public final class MongoGenerationBsonEngine implements GenerationBsonEngine {
                                          Map<String, Long> sequenceStarts,
                                          String batchUniqueRandomStringPath, int batchSize) {
         return generate(collection, iteration, seed, template, fields, idStrategy, sameIterationDocuments,
-                sequenceStarts, Map.of(), batchUniqueRandomStringPath, batchSize, null);
+                sequenceStarts, Map.of(), batchUniqueRandomStringPath, batchSize, null, UnconfiguredFields.SNAPSHOT);
     }
 
     @Override public BsonPayload generate(String collection, long iteration, long seed, BsonPayload template,
@@ -49,10 +50,16 @@ public final class MongoGenerationBsonEngine implements GenerationBsonEngine {
                                          Map<String, Long> sequenceStarts,
                                          Map<String, SharedDateDefinition> sharedDates,
                                          String batchUniqueRandomStringPath, int batchSize,
-                                         Set<String> keepPaths) {
+                                         Set<String> keepPaths, UnconfiguredFields unconfiguredFields) {
         try {
             BsonDocument document = MongoBson.decodeMutable(template);
-            if (keepPaths != null) document = paths.retain(document, keepPaths);
+            if (keepPaths != null) document = switch (unconfiguredFields) {
+                case OMIT -> paths.retain(document, keepPaths);
+                case DEFAULTS -> paths.blank(document, keepPaths);
+                case RANDOM -> evaluator.randomize(document, keepPaths, collection, iteration, seed);
+                // SNAPSHOT collections get a null keep-set from the orchestrator and never reach here.
+                case SNAPSHOT -> document;
+            };
             for (String path : evaluator.cachedEvaluationOrder(fields)) {
                 Object value = evaluator.evaluate(fields.get(path), collection, iteration, seed, path, document,
                         sameIterationDocuments, sequenceStarts, sharedDates,

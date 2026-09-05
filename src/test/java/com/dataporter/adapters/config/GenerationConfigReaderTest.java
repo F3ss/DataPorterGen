@@ -5,6 +5,7 @@ import com.dataporter.generation.domain.GenerationRule.*;
 import com.dataporter.generation.domain.GenerationRule;
 import com.dataporter.generation.domain.SharedDateDefinition;
 import com.dataporter.generation.domain.TemplateSelection;
+import com.dataporter.generation.domain.UnconfiguredFields;
 import com.dataporter.generation.domain.TemplateQuery;
 import com.dataporter.shared.error.ConfigurationException;
 
@@ -157,6 +158,29 @@ class GenerationConfigReaderTest {
         assertThat(new GenerationConfigReader(shuffled).read().templateSelection()).isEqualTo(TemplateSelection.SHUFFLED_CYCLE);
         assertThatThrownBy(() -> new GenerationConfigReader(invalid).read())
                 .isInstanceOf(ConfigurationException.class).hasMessageContaining("root.templateSelection has unsupported value RANDOM");
+    }
+
+    @Test void readsPerCollectionUnconfiguredFieldsAndRejectsUnknownValues(@TempDir Path temp) throws Exception {
+        Path file = temp.resolve("unconfigured-fields.yml");
+        Files.writeString(file, """
+                version: 1
+                collections:
+                  - { name: items, count: 1, fields: {} }
+                  - { name: pruned, count: 1, unconfiguredFields: OMIT, fields: {} }
+                  - { name: blanked, count: 1, unconfiguredFields: DEFAULTS, fields: {} }
+                  - { name: randomized, count: 1, unconfiguredFields: RANDOM, fields: {} }
+                """);
+        Path invalid = temp.resolve("invalid-unconfigured-fields.yml");
+        Files.writeString(invalid, "version: 1\ncollections: [{ name: items, count: 1, unconfiguredFields: SNAPSHOT_ALL, fields: {} }]\n");
+
+        var collections = new GenerationConfigReader(file).read().collections();
+        assertThat(collections.get(0).unconfiguredFields()).isEqualTo(UnconfiguredFields.SNAPSHOT);
+        assertThat(collections.get(1).unconfiguredFields()).isEqualTo(UnconfiguredFields.OMIT);
+        assertThat(collections.get(2).unconfiguredFields()).isEqualTo(UnconfiguredFields.DEFAULTS);
+        assertThat(collections.get(3).unconfiguredFields()).isEqualTo(UnconfiguredFields.RANDOM);
+        assertThatThrownBy(() -> new GenerationConfigReader(invalid).read())
+                .isInstanceOf(ConfigurationException.class)
+                .hasMessageContaining("collections[0].unconfiguredFields has unsupported value SNAPSHOT_ALL");
     }
 
     @Test void acceptsExplicitWorkingLimitBelowDefault(@TempDir Path temp) throws Exception {

@@ -294,9 +294,101 @@ final class BsonRuleEvaluator {
     }
     private static String alphabet(RandomString rule) { return switch(rule.alphabet()) {
         case UPPER_LATIN -> "ABCDEFGHIJKLMNOPQRSTUVWXYZ"; case LOWER_LATIN -> "abcdefghijklmnopqrstuvwxyz";
-        case ALPHANUMERIC -> "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+        case ALPHANUMERIC -> ALPHANUMERIC;
         case HEX -> "0123456789abcdef"; case CUSTOM -> rule.characters();
     }; }
+    private static final String ALPHANUMERIC = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    private static final long[] POW10 = {1L, 10L, 100L, 1_000L, 10_000L, 100_000L, 1_000_000L, 10_000_000L,
+            100_000_000L, 1_000_000_000L, 10_000_000_000L, 100_000_000_000L, 1_000_000_000_000L,
+            10_000_000_000_000L, 100_000_000_000_000L, 1_000_000_000_000_000L, 10_000_000_000_000_000L,
+            100_000_000_000_000_000L, 1_000_000_000_000_000_000L};
+
+    /** RANDOM unconfigured-fields mode: replaces every unkept value in place with a deterministic
+     * random of the same shape as the template value — strings keep their length, numbers keep
+     * their digit count (plus decimals count for double/decimal), arrays keep their length with
+     * each element reshaped, documents recurse. Kept paths keep real template values, mirroring retain. */
+    BsonDocument randomize(BsonDocument document, Set<String> keep, String collection, long iteration, long seed) {
+        randomizeDocument(document, keep, "", collection, iteration, seed);
+        return document;
+    }
+    private void randomizeDocument(BsonDocument document, Set<String> keep, String prefix,
+                                   String collection, long iteration, long seed) {
+        for (Map.Entry<String, BsonValue> entry : document.entrySet()) {
+            String path = prefix + "/" + BsonPointerOperations.escape(entry.getKey());
+            BsonValue value = entry.getValue();
+            if (value.isDocument() && !keep.contains(path))
+                randomizeDocument(value.asDocument(), keep, path, collection, iteration, seed);
+            else if (BsonPointerOperations.kept(path, keep)) continue;
+            else if (value.isArray()) randomizeArray(value.asArray(), keep, path, collection, iteration, seed);
+            else entry.setValue(randomValue(value, path, collection, iteration, seed));
+        }
+    }
+    private void randomizeArray(BsonArray array, Set<String> keep, String path,
+                                String collection, long iteration, long seed) {
+        for (int i = 0; i < array.size(); i++)
+            if (BsonPointerOperations.kept(path + "/" + i, keep)) return; // whole array keeps real values, mirroring retain
+        for (int i = 0; i < array.size(); i++) {
+            String elementPath = path + "/" + i;
+            BsonValue element = array.get(i);
+            if (element.isDocument()) randomizeDocument(element.asDocument(), keep, elementPath, collection, iteration, seed);
+            else if (element.isArray()) randomizeArray(element.asArray(), keep, elementPath, collection, iteration, seed);
+            else array.set(i, randomValue(element, elementPath, collection, iteration, seed));
+        }
+    }
+    private BsonValue randomValue(BsonValue value, String path, String collection, long iteration, long seed) {
+        if (value.isString()) return new BsonString(randomText(value.asString().getValue().length(), collection, iteration, seed, path));
+        if (value.isSymbol()) return new BsonSymbol(randomText(value.asSymbol().getSymbol().length(), collection, iteration, seed, path));
+        if (value.isInt32()) return new BsonInt32(sameDigitsInt(value.asInt32().getValue(), collection, iteration, seed, path));
+        if (value.isInt64()) return new BsonInt64(sameDigits(value.asInt64().getValue(), collection, iteration, seed, path));
+        if (value.isDouble()) return new BsonDouble(sameShapeDecimal(BigDecimal.valueOf(value.asDouble().getValue()), collection, iteration, seed, path).doubleValue());
+        if (value.isDecimal128()) return new BsonDecimal128(new Decimal128(sameShapeDecimal(value.asDecimal128().decimal128Value().bigDecimalValue(), collection, iteration, seed, path)));
+        if (value.isBoolean()) return BsonBoolean.valueOf(unit(seed, collection, iteration, path) < 0.5);
+        if (value.isDateTime()) return new BsonDateTime(sameDigits(value.asDateTime().getValue(), collection, iteration, seed, path));
+        if (value.isTimestamp()) return new BsonTimestamp(
+                sameDigitsInt(value.asTimestamp().getTime(), collection, iteration, seed, path),
+                (int) boundedLong(hash(seed, collection, iteration, path + "#inc"), 0, 999));
+        if (value.isObjectId()) return new BsonObjectId(new org.bson.types.ObjectId(Arrays.copyOf(hash(seed, collection, iteration, path), 12)));
+        if (value.isBinary()) {
+            byte[] data = new byte[value.asBinary().getData().length];
+            for (int i = 0; i < data.length; i++)
+                data[i] = (byte) boundedLong(hash(seed, collection, iteration, path + "#" + i), 0, 255);
+            return new BsonBinary(data);
+        }
+        if (value.isRegularExpression()) return new BsonRegularExpression(
+                randomText(value.asRegularExpression().getPattern().length(), collection, iteration, seed, path),
+                value.asRegularExpression().getOptions());
+        if (value.isJavaScript()) return new BsonJavaScript(randomText(value.asJavaScript().getCode().length(), collection, iteration, seed, path));
+        if (value.isNull() || value instanceof BsonMinKey || value instanceof BsonMaxKey) return value;
+        return BsonNull.VALUE;
+    }
+    private String randomText(int length, String collection, long iteration, long seed, String path) {
+        StringBuilder value = new StringBuilder(length);
+        for (int i = 0; i < length; i++)
+            value.append(ALPHANUMERIC.charAt(betweenInt(seed, collection, iteration, path + "#" + i, 0, ALPHANUMERIC.length() - 1)));
+        return value.toString();
+    }
+    /** Same digit count as the template, sign preserved: 12345 -> [10000, 99999], 0 -> [0, 9]. */
+    private static long sameDigits(long template, String collection, long iteration, long seed, String path) {
+        int digits = Long.toString(template).length() - (template < 0 ? 1 : 0);
+        long min = digits == 1 ? 0 : POW10[digits - 1];
+        long max = digits >= 19 ? Long.MAX_VALUE : POW10[digits] - 1;
+        long value = boundedLong(hash(seed, collection, iteration, path), min, max);
+        return template < 0 ? -value : value;
+    }
+    private static int sameDigitsInt(int template, String collection, long iteration, long seed, String path) {
+        long value = sameDigits(template, collection, iteration, seed, path);
+        return (int) Math.max(Integer.MIN_VALUE, Math.min(value, Integer.MAX_VALUE));
+    }
+    /** Same digit count of the unscaled value and same decimals count: 12.34 -> any dd.dd, sign preserved. */
+    private static BigDecimal sameShapeDecimal(BigDecimal template, String collection, long iteration, long seed, String path) {
+        int digits = template.abs().unscaledValue().abs().toString().length();
+        BigInteger min = digits == 1 ? BigInteger.ZERO : BigInteger.TEN.pow(digits - 1);
+        BigInteger max = BigInteger.TEN.pow(digits).subtract(BigInteger.ONE);
+        BigInteger unscaled = new BigInteger(1, hash(seed, collection, iteration, path))
+                .mod(max.subtract(min).add(BigInteger.ONE)).add(min);
+        BigDecimal result = new BigDecimal(unscaled, template.scale());
+        return template.signum() < 0 ? result.negate() : result;
+    }
     private static String batchUniqueRandomString(long seed, String collection, long iteration, String path,
                                                   String alphabet, int length, int batchSize) {
         int suffixLength = 0;
