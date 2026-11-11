@@ -1,0 +1,42 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dataportergen-config
+  labels:
+    app: dataportergen
+data:
+  # Общие переменные окружения для приложения
+  MIGRATION_MODE: "GENERATE"
+  GENERATION_CONFIG_PATH: "/app/config/generation.yml"
+  GENERATION_VALIDATE_ONLY: "false"
+  GENERATION_ALLOW_UNPROVEN_IDS: "false"
+  MIGRATION_REPORT_PATH: "/app/reports/generation-report.json"
+  SOURCE_DATABASE: "catalog"
+  TARGET_DATABASE: "catalog"
+
+  # Конфигурационный файл генерации данных
+  generation.yml: |
+    version: 1
+    seed: 12345
+    templateSelection: SHUFFLED_CYCLE
+    batchSize: 1000
+    parallelism: 2
+    maxWorkingMegabytes: 100
+    maxInFlightMegabytes: 256
+
+    collections:
+      - name: customers
+        count: 5000
+        fields:
+          /_id:
+            kind: randomString
+            alphabet: ALPHANUMERIC
+            length: 16
+          /status:
+            kind: literal
+            value: "ACTIVE"
+          /code:
+            kind: randomAlphaNumStringBetween
+            min: 100000
+            max: 999999
+            length: 6

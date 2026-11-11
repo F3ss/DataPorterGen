@@ -1,0 +1,56 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: dataportergen-job
+  labels:
+    app: dataportergen
+spec:
+  # Количество одновременно работающих независимых реплик
+  parallelism: 3
+  # Общее количество успешных завершений
+  completions: 3
+  # Количество повторных попыток при сбое пода
+  backoffLimit: 2
+  template:
+    metadata:
+      labels:
+        app: dataportergen
+    spec:
+      # В Job контейнер штатно завершает работу и переходит в статус Completed без перезапуска
+      restartPolicy: Never
+      containers:
+        - name: dataportergen
+          image: dataportergen:latest
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: dataportergen-config
+            - secretRef:
+                name: dataportergen-secret
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "512Mi"
+            limits:
+              cpu: "2"
+              memory: "1Gi"
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+          volumeMounts:
+            - name: config-volume
+              mountPath: /app/config/generation.yml
+              subPath: generation.yml
+              readOnly: true
+            - name: reports-volume
+              mountPath: /app/reports
+      volumes:
+        - name: config-volume
+          configMap:
+            name: dataportergen-config
+            items:
+              - key: generation.yml
+                path: generation.yml
+        - name: reports-volume
+          emptyDir: {}

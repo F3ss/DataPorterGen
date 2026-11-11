@@ -1,0 +1,69 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dataportergen
+  labels:
+    app: dataportergen
+spec:
+  # Количество независимых реплик
+  replicas: 3
+  selector:
+    matchLabels:
+      app: dataportergen
+  template:
+    metadata:
+      labels:
+        app: dataportergen
+    spec:
+      # Важное примечание: В Deployment спецификация Kubernetes разрешает только restartPolicy: Always.
+      # Если приложение завершит работу (exit 0), Kubernetes перезапустит контейнер снова.
+      # Чтобы под отработал один раз и не уходил в бесконечный цикл перезапусков,
+      # после успешного выполнения команды вызывается 'sleep infinity'.
+      containers:
+        - name: dataportergen
+          image: dataportergen:latest
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              java -jar /app/DataPorterGen.jar
+              STATUS=$?
+              if [ $STATUS -eq 0 ]; then
+                echo "DataPorterGen completed successfully. Keeping pod alive in completed state..."
+                exec sleep infinity
+              else
+                echo "DataPorterGen failed with exit code $STATUS"
+                exit $STATUS
+              fi
+          envFrom:
+            - configMapRef:
+                name: dataportergen-config
+            - secretRef:
+                name: dataportergen-secret
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "512Mi"
+            limits:
+              cpu: "2"
+              memory: "1Gi"
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+          volumeMounts:
+            - name: config-volume
+              mountPath: /app/config/generation.yml
+              subPath: generation.yml
+              readOnly: true
+            - name: reports-volume
+              mountPath: /app/reports
+      volumes:
+        - name: config-volume
+          configMap:
+            name: dataportergen-config
+            items:
+              - key: generation.yml
+                path: generation.yml
+        - name: reports-volume
+          emptyDir: {}
