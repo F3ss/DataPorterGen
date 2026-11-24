@@ -51,7 +51,8 @@ public class MigrationProperties {
 
     public GenerationCommand toGenerationCommand() {
         return new GenerationCommand(new Endpoint(source.uri, source.database), new Endpoint(target.uri, target.database),
-                new GenerationOptions(generation.validateOnly, generation.allowUnprovenIds));
+                new GenerationOptions(generation.validateOnly, generation.allowUnprovenIds,
+                        generation.validateFieldFormats, generation.updateFieldFormats));
     }
 
     public Path migrationReportPath() { return Path.of(reportPath); }
@@ -120,12 +121,18 @@ public class MigrationProperties {
         @NotBlank private String configPath = "./generation.yml";
         private boolean validateOnly;
         private boolean allowUnprovenIds;
+        private boolean validateFieldFormats = true;
+        private boolean updateFieldFormats;
         public String getConfigPath() { return configPath; }
         public void setConfigPath(String configPath) { this.configPath = configPath; }
         public boolean isValidateOnly() { return validateOnly; }
         public void setValidateOnly(boolean validateOnly) { this.validateOnly = validateOnly; }
         public boolean isAllowUnprovenIds() { return allowUnprovenIds; }
         public void setAllowUnprovenIds(boolean allowUnprovenIds) { this.allowUnprovenIds = allowUnprovenIds; }
+        public boolean isValidateFieldFormats() { return validateFieldFormats; }
+        public void setValidateFieldFormats(boolean validateFieldFormats) { this.validateFieldFormats = validateFieldFormats; }
+        public boolean isUpdateFieldFormats() { return updateFieldFormats; }
+        public void setUpdateFieldFormats(boolean updateFieldFormats) { this.updateFieldFormats = updateFieldFormats; }
     }
 
 }

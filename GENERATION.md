@@ -54,6 +54,8 @@ export TARGET_DATABASE='catalog'
 export GENERATION_CONFIG_PATH='./generation.yml'
 export GENERATION_VALIDATE_ONLY=false
 export GENERATION_ALLOW_UNPROVEN_IDS=false
+export GENERATION_VALIDATE_FIELD_FORMATS=true
+export GENERATION_UPDATE_FIELD_FORMATS=false
 export MIGRATION_REPORT_PATH='reports/generation-report.json'
 
 java -jar build/libs/DataPorterGen.jar
@@ -88,7 +90,30 @@ java -jar build/libs/DataPorterGen.jar
 
 Генерация не атомарна, не имеет rollback или resume. После неудачной записи состояние цели нужно проверить вручную.
 
-`GENERATION_ALLOW_UNPROVEN_IDS` — аварийный флаг с безопасным default `false`. При `true` приложение пропускает только статическое доказательство уникальности explicit `_id`, но сохраняет обязательность scalar BSON, запрет missing/null/omit, порядок и `count` межколлекционных ссылок, проверки secondary unique-индексов, target-key probes и окончательное enforcement MongoDB. Прямой `literal`, полностью literal-`concat` и локальная цепочка `ref`, разрешающаяся в literal, отклоняются даже с флагом. Перед первой записью CLI выводит `ID UNIQUENESS PROOF DISABLED`; тот же secret-safe текст сохраняется в generation-report.
+`GENERATION_ALLOW_UNPROVEN_IDS` по умолчанию равен `false`. При `true` приложение разрешает явный `_id` без доказательства уникальности, в том числе константный. Явный `_id` должен быть BSON-скаляром. Правила, допускающие `null` или пропуск `_id`, отклоняются. Проверки ссылок и secondary unique-индексов продолжают действовать. Перед записью CLI и отчёт показывают `ID UNIQUENESS PROOF DISABLED`.
+
+### Константный `_id` для отладки
+
+Установите `GENERATION_ALLOW_UNPROVEN_IDS=true` или передайте `--migration.generation.allow-unproven-ids=true`. Для одной отладочной записи задайте коллекции `count: 1` и укажите константу в `fields`:
+
+```yaml
+fields:
+  /_id: { kind: literal, value: "debug-1" }
+```
+
+При включённой проверке форматов тип константы должен совпадать с типом `_id` в исходных шаблонах. Несколько операций с одной константой записываются в один и тот же документ. Если документ с таким `_id` уже есть в цели, он полностью заменяется.
+
+## Проверка форматов полей
+
+`GENERATION_VALIDATE_FIELD_FORMATS=true` включает проверку по умолчанию. После применения `query` приложение читает сохранённый snapshot и сравнивает наборы BSON-типов с возможными результатами правил `fields`, включая явно настроенный `/_id`, вложенные поля, элементы массивов и ветки `weightedChoice`. Отсутствующие поля и BSON `null` не участвуют в сравнении. Поля, для которых в сохранённых шаблонах нет ни одного ненулевого значения, можно добавлять с любым допустимым типом. Если snapshot усечён, проверка охватывает только сохранённый префикс.
+
+При расхождении приложение останавливается на стадии `VALIDATE_FIELD_FORMATS` до проверки целевой БД и записи. В ошибке указаны коллекция, путь поля и оба набора типов. Значения полей в отчёт не попадают.
+
+При `GENERATION_UPDATE_FIELD_FORMATS=true` приложение исправляет однозначные несовпадения параметров `randomNumber.bsonType`, `uuid.output` и `dateTime.output`. Числовые границы должны помещаться в обнаруженный тип. При переключении даты на `STRING` используется заданный `pattern` или ISO 8601 с миллисекундами и часовым смещением. BSON-тип строки сам по себе не задаёт её шаблон. Если для исправления нужно сменить вид правила или выбрать один тип из нескольких, запуск завершится ошибкой до сохранения файла.
+
+Приложение проверяет исправленный конфиг целиком, атомарно заменяет файл из `GENERATION_CONFIG_PATH` и использует новую версию в том же запуске. Автообновлению нужен файл, который можно заменить в его каталоге. При сохранении могут измениться отступы и кавычки YAML/JSON, комментарии удаляются. В `validate-only` явно включённое автообновление сохраняет конфиг, а запись в MongoDB пропускается.
+
+`GENERATION_VALIDATE_FIELD_FORMATS=false` отключает проверку и автообновление. Параметры CLI имеют имена `--migration.generation.validate-field-formats` и `--migration.generation.update-field-formats`.
 
 ## Структура generation-конфига
 

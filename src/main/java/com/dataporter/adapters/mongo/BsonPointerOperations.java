@@ -30,6 +30,26 @@ final class BsonPointerOperations {
         }
         return value;
     }
+
+    void collectTypes(BsonValue value, String pointer, Set<String> types) {
+        if (value == null || value.isNull()) return;
+        if (pointer.isEmpty()) {
+            types.add(value.isBinary() && value.asBinary().getType() == BsonBinarySubType.UUID_STANDARD.getValue()
+                    ? "UUID" : value.getBsonType().name());
+            return;
+        }
+        int end = pointer.indexOf('/', 1);
+        String segment = end < 0 ? pointer.substring(1) : pointer.substring(1, end);
+        String rest = end < 0 ? "" : pointer.substring(end);
+        if (segment.equals("~2")) {
+            if (value.isArray()) value.asArray().forEach(item -> collectTypes(item, rest, types));
+        } else if (value.isDocument()) {
+            collectTypes(value.asDocument().get(unescape(segment)), rest, types);
+        } else if (value.isArray()) {
+            int index = arrayIndex(segment, value.asArray().size());
+            if (index >= 0) collectTypes(value.asArray().get(index), rest, types);
+        }
+    }
     void set(BsonDocument document, String pointer, BsonValue value) {
         List<String> tokens = tokens(pointer); BsonValue parent = document;
         for (int i = 0; i < tokens.size() - 1; i++) {
@@ -130,11 +150,12 @@ final class BsonPointerOperations {
         List<String> cached = pointerTokensCache.get(pointer);
         if (cached != null) return cached;
         List<String> computed = Arrays.stream(pointer.substring(1).split("/", -1))
-                .map(v -> v.replace("~1", "/").replace("~0", "~")).toList();
+                .map(BsonPointerOperations::unescape).toList();
         pointerTokensCache.put(pointer, computed);
         return computed;
     }
     static String escape(String value) { return value.replace("~", "~0").replace("/", "~1"); }
+    private static String unescape(String value) { return value.replace("~1", "/").replace("~0", "~"); }
     private static int arrayIndex(String token,int size){try{int value=Integer.parseInt(token);return value>=0&&value<size?value:-1;}catch(NumberFormatException e){return -1;}}
     private static int requiredArrayIndex(String token,int size,String pointer){int value=arrayIndex(token,size);if(value<0)throw new GenerationException("Invalid array index in JSON Pointer "+pointer);return value;}
 }

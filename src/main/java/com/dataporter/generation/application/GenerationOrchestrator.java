@@ -3,6 +3,7 @@ package com.dataporter.generation.application;
 import com.dataporter.generation.domain.GenerationCollectionResult;
 import com.dataporter.generation.domain.GenerationCommand;
 import com.dataporter.generation.domain.GenerationConfigurationValidator;
+import com.dataporter.generation.domain.GenerationFormatChange;
 import com.dataporter.generation.domain.GenerationReport;
 import com.dataporter.generation.domain.GenerationSourceInspection;
 import com.dataporter.generation.domain.GenerationSpec;
@@ -33,10 +34,13 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class GenerationOrchestrator {
+    static final String VALIDATE_GENERATION_RULES = "VALIDATE_GENERATION_RULES";
+    static final String GENERATE_AND_APPEND = "GENERATE_AND_APPEND";
+
     public static final List<String> STAGES = List.of("VALIDATE_CONFIGURATION", "CONNECT_SOURCE", "INSPECT_SOURCE",
-            "VALIDATE_COLLECTION_ORDER", "SNAPSHOT_TEMPLATES", "CONNECT_TARGET", "VALIDATE_TARGET_COLLECTIONS",
-            "RESOLVE_IDS_AND_UNIQUE_CONSTRAINTS", "VALIDATE_GENERATION_RULES", "CHECK_TARGET_WRITABLE",
-            "GENERATE_AND_APPEND", "WRITE_REPORT");
+            "VALIDATE_COLLECTION_ORDER", "SNAPSHOT_TEMPLATES", "VALIDATE_FIELD_FORMATS", "CONNECT_TARGET", "VALIDATE_TARGET_COLLECTIONS",
+            "RESOLVE_IDS_AND_UNIQUE_CONSTRAINTS", VALIDATE_GENERATION_RULES, "CHECK_TARGET_WRITABLE",
+            GENERATE_AND_APPEND, "WRITE_REPORT");
 
     private final GenerationSource source;
     private final GenerationTarget target;
@@ -118,13 +122,33 @@ public final class GenerationOrchestrator {
                     if (count.snapshotTruncated) truncated.add(c.name());
                 });
                 if (!truncated.isEmpty()) warnings.add("Template snapshots were truncated for collections " + truncated
-                        + "; _id analysis and validate-only coverage use only the stored snapshot prefix");
+                        + "; field format validation, _id analysis and validate-only coverage use only the stored snapshot prefix");
             });
-            timed(stage, STAGES.get(5), durations, target::checkConnection);
-            timed(stage, STAGES.get(6), durations, () -> preflight.validateTargetCollections(spec[0], target.ordinaryCollections()));
-            timed(stage, STAGES.get(7), durations, () -> preflight.resolveIds(spec[0], catalog[0], ids, randomStringIds,
+            if (command.options().validateFieldFormats()) {
+                timed(stage, STAGES.get(5), durations, () -> {
+                    GenerationFieldFormats formats = new GenerationFieldFormats(spec[0], catalog[0], bson, cancellation);
+                    List<GenerationFormatChange> changes = command.options().updateFieldFormats()
+                            ? formats.corrections(spec[0]) : List.of();
+                    if (changes.isEmpty()) formats.validate(spec[0]);
+                    else {
+                        spec[0] = specReader.updateFieldFormats(spec[0].configHash(), changes, updated -> {
+                            specValidator.validate(updated);
+                            formats.validate(updated);
+                            checkCancelled();
+                        });
+                        String warning = "Generation config field formats updated in " + changes.size() + " rule(s)";
+                        warnings.add(warning);
+                        progress.warning(id, warning);
+                    }
+                });
+            } else {
+                durations.put(STAGES.get(5), 0L);
+            }
+            timed(stage, STAGES.get(6), durations, target::checkConnection);
+            timed(stage, STAGES.get(7), durations, () -> preflight.validateTargetCollections(spec[0], target.ordinaryCollections()));
+            timed(stage, STAGES.get(8), durations, () -> preflight.resolveIds(spec[0], catalog[0], ids, randomStringIds,
                     sequenceStarts, randomAnalyses, warnings, preWriteWarnings));
-            timed(stage, STAGES.get(8), durations, () -> {
+            timed(stage, VALIDATE_GENERATION_RULES, durations, () -> {
                 preflight.validateUniqueConstraints(spec[0], ids, randomStringIds, randomAnalyses,
                         command.options().allowUnprovenIds(), constraints);
                 keepSets.putAll(GenerationPreflight.keepSets(spec[0], ids));
@@ -133,12 +157,12 @@ public final class GenerationOrchestrator {
             });
             preWriteWarnings.forEach(warning -> progress.warning(id, warning));
             if (!command.options().validateOnly()) {
-                timed(stage, STAGES.get(9), durations, target::checkWritable);
-                timed(stage, STAGES.get(10), durations, () -> executor.upsert(spec[0], seed[0], catalog[0], ids,
+                timed(stage, STAGES.get(10), durations, target::checkWritable);
+                timed(stage, GENERATE_AND_APPEND, durations, () -> executor.upsert(spec[0], seed[0], catalog[0], ids,
                         randomStringIds, sequenceStarts, keepSets.isEmpty() ? null : keepSets,
                         constraints, counters, writeAttempted, id));
             } else {
-                durations.put(STAGES.get(9), 0L); durations.put(STAGES.get(10), 0L);
+                durations.put(STAGES.get(10), 0L); durations.put(GENERATE_AND_APPEND, 0L);
             }
         } catch (OperationCancelledException e) {
             status = OperationStatus.CANCELLED; errors.add(issue(stage[0], e));
@@ -154,7 +178,7 @@ public final class GenerationOrchestrator {
             }
             close(source); close(target);
         }
-        durations.put(STAGES.get(11), 0L);
+        durations.put(STAGES.get(12), 0L);
         GenerationSpec effective = spec[0];
         OperationStatus finalStatus = status;
         List<GenerationCollectionResult> results = effective == null ? List.of() : effective.collections().stream().map(item -> {

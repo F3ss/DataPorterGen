@@ -1,6 +1,7 @@
 package com.dataporter.adapters.config;
 
 import com.dataporter.generation.domain.CollectionGenerationSpec;
+import com.dataporter.generation.domain.GenerationFormatChange;
 import com.dataporter.generation.domain.GenerationRule.*;
 import com.dataporter.generation.domain.GenerationRule;
 import com.dataporter.generation.domain.GenerationSpec;
@@ -14,30 +15,99 @@ import com.dataporter.shared.error.ConfigurationException;
 import com.fasterxml.jackson.core.JsonFactory;
 import com.fasterxml.jackson.core.StreamReadFeature;
 import com.fasterxml.jackson.databind.*;
+import com.fasterxml.jackson.databind.cfg.JsonNodeFeature;
+import com.fasterxml.jackson.databind.json.JsonMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 
 import java.io.IOException;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.nio.file.*;
+import java.nio.file.attribute.AclFileAttributeView;
+import java.nio.file.attribute.PosixFileAttributeView;
 import java.security.MessageDigest;
 import java.time.Instant;
 import java.util.*;
+import java.util.function.Consumer;
 
 public final class GenerationConfigReader implements GenerationSpecReader {
     private final Path configPath;
+    private final ObjectMapper mapper;
 
-    public GenerationConfigReader(Path configPath) { this.configPath = configPath; }
+    public GenerationConfigReader(Path configPath) {
+        this.configPath = configPath.toAbsolutePath().normalize();
+        String lower = configPath.getFileName().toString().toLowerCase(Locale.ROOT);
+        JsonFactory factory = lower.endsWith(".yaml") || lower.endsWith(".yml")
+                ? YAMLFactory.builder().enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION).build()
+                : JsonFactory.builder().enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION).build();
+        mapper = JsonMapper.builder(factory)
+                .enable(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS)
+                .disable(JsonNodeFeature.STRIP_TRAILING_BIGDECIMAL_ZEROES)
+                .enable(SerializationFeature.INDENT_OUTPUT)
+                .build();
+    }
 
     @Override public GenerationSpec read() {
         try {
-            byte[] content = Files.readAllBytes(configPath.toAbsolutePath().normalize());
-            String lower = configPath.getFileName().toString().toLowerCase(Locale.ROOT);
-            JsonFactory factory = lower.endsWith(".yaml") || lower.endsWith(".yml")
-                    ? YAMLFactory.builder().enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION).build()
-                    : JsonFactory.builder().enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION).build();
-            ObjectMapper mapper = new ObjectMapper(factory);
+            byte[] content = Files.readAllBytes(configPath);
+            return parse(mapper.readTree(content), content);
+        } catch (IOException e) {
+            throw new ConfigurationException("Cannot read or parse generation config " + configPath, e);
+        }
+    }
+
+    @Override public GenerationSpec updateFieldFormats(String originalHash, List<GenerationFormatChange> changes,
+                                                       Consumer<GenerationSpec> validate) {
+        try {
+            Path file = configPath.toRealPath();
+            byte[] content = readUnchanged(file, originalHash);
             JsonNode root = mapper.readTree(content);
+            for (GenerationFormatChange change : changes) {
+                if (!(root.at(change.rulePointer()) instanceof ObjectNode rule))
+                    throw new ConfigurationException("Cannot locate generation rule to update");
+                change.properties().forEach(rule::put);
+            }
+            byte[] updated = mapper.writeValueAsBytes(root);
+            JsonNode reread = mapper.readTree(updated);
+            if (!root.equals(reread))
+                throw new ConfigurationException("Cannot preserve generation config values while updating field formats");
+            GenerationSpec corrected = parse(reread, updated);
+            validate.accept(corrected);
+            replace(file, updated, originalHash);
+            return corrected;
+        } catch (IOException e) {
+            throw new ConfigurationException("Cannot update generation config " + configPath
+                    + "; the file and its directory must support atomic replacement", e);
+        }
+    }
+
+    private byte[] readUnchanged(Path file, String originalHash) throws IOException {
+        byte[] content = Files.readAllBytes(file);
+        if (!sha256(content).equals(originalHash))
+            throw new ConfigurationException("Generation config changed during field format validation");
+        return content;
+    }
+
+    private void replace(Path file, byte[] content, String originalHash) throws IOException {
+        Path temporary = Files.createTempFile(file.getParent(), ".dataporter-generation-", ".tmp");
+        try {
+            PosixFileAttributeView posix = Files.getFileAttributeView(file, PosixFileAttributeView.class);
+            AclFileAttributeView acl = Files.getFileAttributeView(file, AclFileAttributeView.class);
+            if (acl != null) Files.getFileAttributeView(temporary, AclFileAttributeView.class).setAcl(acl.getAcl());
+            Files.write(temporary, content);
+            if (posix != null) Files.setPosixFilePermissions(temporary, posix.readAttributes().permissions());
+            if (!configPath.toRealPath().equals(file))
+                throw new ConfigurationException("Generation config moved during field format validation");
+            readUnchanged(file, originalHash);
+            Files.move(temporary, file, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+        } finally {
+            Files.deleteIfExists(temporary);
+        }
+    }
+
+    private GenerationSpec parse(JsonNode root, byte[] content) {
+        try {
             requireObject(root, "root");
             unknown(root, "root", "version", "seed", "batchSize", "parallelism", "maxWorkingMegabytes",
                     "maxInFlightMegabytes", "templateSelection", "sharedDates", "collections");
@@ -88,7 +158,7 @@ public final class GenerationConfigReader implements GenerationSpecReader {
                     sharedDates, collections, sha256(content));
         } catch (ConfigurationException e) {
             throw e;
-        } catch (IOException | RuntimeException e) {
+        } catch (RuntimeException e) {
             throw new ConfigurationException("Cannot read generation config " + configPath + ": " + e.getMessage());
         }
     }

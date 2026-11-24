@@ -1,6 +1,7 @@
 package com.dataporter.adapters.config;
 
 import com.dataporter.generation.application.GenerationSpecValidator;
+import com.dataporter.generation.domain.GenerationFormatChange;
 import com.dataporter.generation.domain.GenerationRule.*;
 import com.dataporter.generation.domain.GenerationRule;
 import com.dataporter.generation.domain.SharedDateDefinition;
@@ -15,9 +16,32 @@ import org.junit.jupiter.api.io.TempDir;
 import java.math.BigInteger;
 import java.nio.file.*;
 import java.util.List;
+import java.util.Map;
 import static org.assertj.core.api.Assertions.*;
 
 class GenerationConfigReaderTest {
+    @Test void updatesJsonAndRejectsAStaleConfigHash(@TempDir Path temp) throws Exception {
+        Path file = temp.resolve("generation.json");
+        Files.writeString(file, """
+                {"version":1,"collections":[{"name":"items","count":7,
+                  "fields":{"/amount":{"kind":"randomNumber","bsonType":"INT32","min":1,"max":8}}}]}
+                """);
+        GenerationConfigReader reader = new GenerationConfigReader(file);
+        var original = reader.read();
+        var changes = List.of(new GenerationFormatChange("/collections/0/fields/~1amount", Map.of("bsonType", "INT64")));
+
+        var updated = reader.updateFieldFormats(original.configHash(), changes, new GenerationSpecValidator()::validate);
+
+        assertThat(updated).isEqualTo(reader.read());
+        assertThat(updated.configHash()).isNotEqualTo(original.configHash());
+        assertThat(updated.collections().getFirst().count()).isEqualTo(7);
+        assertThat(updated.collections().getFirst().fields().get("/amount"))
+                .isInstanceOfSatisfying(RandomNumber.class, number -> assertThat(number.bsonType()).isEqualTo(NumberType.INT64));
+        assertThatThrownBy(() -> reader.updateFieldFormats(original.configHash(), changes, ignored -> {}))
+                .isInstanceOf(ConfigurationException.class).hasMessageContaining("config changed");
+        assertThat(reader.read()).isEqualTo(updated);
+    }
+
     @Test void readsOptionalTemplateQueryAsImmutableYamlValueTree(@TempDir Path temp) throws Exception {
         Path file = temp.resolve("query.yml");
         Files.writeString(file, """

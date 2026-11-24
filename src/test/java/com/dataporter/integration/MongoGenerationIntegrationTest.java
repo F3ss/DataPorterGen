@@ -19,6 +19,7 @@ import com.mongodb.client.model.Sorts;
 import com.mongodb.client.model.IndexOptions;
 import org.bson.Document;
 import org.bson.types.Decimal128;
+import org.bson.types.ObjectId;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.io.TempDir;
 import org.testcontainers.containers.MongoDBContainer;
@@ -43,9 +44,9 @@ class MongoGenerationIntegrationTest {
         Endpoint target = new Endpoint(MONGO.getReplicaSetUrl(), "generation_query_target_" + suffix);
         try (MongoClient client = MongoClients.create(source.uri())) {
             client.getDatabase(source.database()).getCollection("items").insertMany(List.of(
-                    new Document("_id", 1).append("requiredValue", "A"),
-                    new Document("_id", 2).append("ignored", true),
-                    new Document("_id", 3).append("requiredValue", "C")));
+                    new Document("_id", new ObjectId("000000000000000000000001")).append("requiredValue", "A").append("amount", 1L),
+                    new Document("_id", new ObjectId("000000000000000000000002")).append("amount", "excluded"),
+                    new Document("_id", new ObjectId("000000000000000000000003")).append("requiredValue", "C").append("amount", 3L)));
             client.getDatabase(target.database()).getCollection("items")
                     .insertOne(new Document("_id", "target-template"));
         }
@@ -66,18 +67,28 @@ class MongoGenerationIntegrationTest {
                       /_id: { kind: objectId }
                       /copied: { kind: ref, path: /requiredValue }
                       /ordinal: { kind: sequence, start: 0, step: 1 }
+                      /amount: { kind: randomNumber, bsonType: INT32, min: 10, max: 10 }
                       /generated: { kind: literal, value: true }
                 """);
 
-        GenerationReport report = run(source, target, config, false, temp.resolve("filtered-report.json"));
+        GenerationReport mismatch = run(source, target, config, false, temp.resolve("mismatch-report.json"));
+        assertThat(mismatch.status()).isEqualTo(OperationStatus.FAILED);
+        assertThat(mismatch.errors()).singleElement().satisfies(issue ->
+                assertThat(issue.message()).contains("items/amount", "INT32", "INT64").doesNotContain("STRING"));
+        assertThat(Files.readString(config)).contains("bsonType: INT32");
+
+        GenerationReport report = run(source, target, config, new GenerationOptions(false, false, true, true),
+                temp.resolve("filtered-report.json"));
 
         assertThat(report.status()).as(report.errors().toString()).isEqualTo(OperationStatus.SUCCESS);
         assertThat(report.collections().getFirst().snapshotTemplates()).isEqualTo(2);
+        assertThat(report.configHash()).isEqualTo(new GenerationConfigReader(config).read().configHash());
         try (MongoClient client = MongoClients.create(target.uri())) {
             List<Document> generated = client.getDatabase(target.database()).getCollection("items")
                     .find(new Document("generated", true)).sort(Sorts.ascending("ordinal")).into(new ArrayList<>());
             assertThat(generated).extracting(document -> document.getString("copied"))
                     .containsExactly("A", "C", "A");
+            assertThat(generated).extracting(document -> document.getLong("amount")).containsOnly(10L);
         }
     }
 
@@ -162,8 +173,8 @@ class MongoGenerationIntegrationTest {
         Endpoint endpoint = new Endpoint(MONGO.getReplicaSetUrl(), database);
         try (MongoClient client = MongoClients.create(endpoint.uri())) {
             client.getDatabase(database).getCollection("items").insertMany(List.of(
-                    new Document("_id", 1).append("staticValue", "A"),
-                    new Document("_id", 2).append("staticValue", "B")));
+                    new Document("_id", new ObjectId("000000000000000000000001")).append("staticValue", "A"),
+                    new Document("_id", new ObjectId("000000000000000000000002")).append("staticValue", "B")));
         }
         Path config = temp.resolve("generation.yml");
         Files.writeString(config, """
@@ -263,9 +274,9 @@ class MongoGenerationIntegrationTest {
         Endpoint target = new Endpoint(MONGO.getReplicaSetUrl(), "generation_composite_target_" + suffix);
         try (MongoClient client = MongoClients.create(source.uri())) {
             client.getDatabase(source.database()).getCollection("items").insertMany(List.of(
-                    new Document("_id", 1).append("templateCode", "A").append("exact", Decimal128.parse("1.10")),
-                    new Document("_id", 2).append("templateCode", "B").append("exact", Decimal128.parse("2.20")),
-                    new Document("_id", 3).append("templateCode", "C").append("exact", Decimal128.parse("3.30"))));
+                    new Document("_id", "1").append("templateCode", "A").append("exact", Decimal128.parse("1.10")),
+                    new Document("_id", "2").append("templateCode", "B").append("exact", Decimal128.parse("2.20")),
+                    new Document("_id", "3").append("templateCode", "C").append("exact", Decimal128.parse("3.30"))));
             client.getDatabase(target.database()).getCollection("items")
                     .insertOne(new Document("_id", "target-placeholder"));
         }
@@ -331,7 +342,7 @@ class MongoGenerationIntegrationTest {
         Endpoint target = new Endpoint(MONGO.getReplicaSetUrl(), "generation_batched_target_" + suffix);
         try (MongoClient client = MongoClients.create(source.uri())) {
             client.getDatabase(source.database()).getCollection("items")
-                    .insertOne(new Document("_id", "template").append("templateValue", true));
+                    .insertOne(new Document("templateValue", true));
             MongoCollection<Document> targetItems = client.getDatabase(target.database()).getCollection("items");
             targetItems.insertOne(new Document("_id", "pre-existing").append("code", "pre-existing-code"));
             targetItems.createIndex(new Document("code", 1), new IndexOptions().unique(true));
@@ -375,8 +386,8 @@ class MongoGenerationIntegrationTest {
         String padding = "x".repeat(600_000);
         try (MongoClient client = MongoClients.create(endpoint.uri())) {
             client.getDatabase(database).getCollection("items").insertMany(List.of(
-                    new Document("_id", 1).append("template", "A").append("padding", padding),
-                    new Document("_id", 2).append("template", "B").append("padding", padding)));
+                    new Document("_id", new ObjectId("000000000000000000000001")).append("template", "A").append("padding", padding),
+                    new Document("_id", new ObjectId("000000000000000000000002")).append("template", "B").append("padding", padding)));
         }
         Path config = temp.resolve("bounded-generation.yml");
         Files.writeString(config, """
@@ -410,7 +421,7 @@ class MongoGenerationIntegrationTest {
         }
     }
 
-    @Test void allowUnprovenIdsUpsertsRepeatedExactIdAndKeepsLastState(@TempDir Path temp) throws Exception {
+    @Test void constantLiteralIdRequiresOptInAndUpsertsTheSameDocument(@TempDir Path temp) throws Exception {
         String suffix = UUID.randomUUID().toString().replace("-", "");
         Endpoint source = new Endpoint(MONGO.getReplicaSetUrl(), "generation_unproven_source_" + suffix);
         Endpoint target = new Endpoint(MONGO.getReplicaSetUrl(), "generation_unproven_target_" + suffix);
@@ -418,13 +429,14 @@ class MongoGenerationIntegrationTest {
             client.getDatabase(source.database()).getCollection("items")
                     .insertOne(new Document("_id", "template").append("templateValue", true));
             client.getDatabase(target.database()).getCollection("items")
-                    .insertOne(new Document("_id", "target-placeholder"));
+                    .insertMany(List.of(new Document("_id", "target-placeholder"),
+                            new Document("_id", "repeated").append("stale", true)));
         }
         Path config = temp.resolve("unproven-id-generation.yml");
         Files.writeString(config, """
                 version: 1
                 seed: 12345
-                batchSize: 3
+                batchSize: 2
                 parallelism: 1
                 maxWorkingMegabytes: 10
                 maxInFlightMegabytes: 2
@@ -432,13 +444,15 @@ class MongoGenerationIntegrationTest {
                   - name: items
                     count: 3
                     fields:
-                      /_id:
-                        kind: weightedChoice
-                        choices:
-                          - { value: repeated, weight: 1 }
+                      /_id: { kind: literal, value: repeated }
                       /ordinal: { kind: sequence, start: 0, step: 1 }
                       /generated: { kind: literal, value: true }
                 """);
+
+        GenerationReport strict = run(source, target, config, false, temp.resolve("strict.json"));
+        assertThat(strict.status()).isEqualTo(OperationStatus.FAILED);
+        assertThat(strict.safeToRetry()).isTrue();
+        assertThat(strict.errors().getFirst().message()).contains("Cannot prove generated uniqueness");
 
         GenerationReport report = run(source, target, config, false, true, temp.resolve("unproven.json"));
 
@@ -452,7 +466,7 @@ class MongoGenerationIntegrationTest {
             assertThat(items.find(new Document("_id", "repeated")).first())
                     .containsEntry("ordinal", 2L)
                     .containsEntry("generated", true)
-                    .doesNotContainKey("_idFromEarlierAttempt");
+                    .doesNotContainKey("stale");
         }
     }
 
@@ -461,9 +475,9 @@ class MongoGenerationIntegrationTest {
         Endpoint endpoint = new Endpoint(MONGO.getReplicaSetUrl(), database);
         try (MongoClient client = MongoClients.create(endpoint.uri())) {
             client.getDatabase(database).getCollection("events")
-                    .insertOne(new Document("_id", "event-template"));
+                    .insertOne(new Document("template", true));
             client.getDatabase(database).getCollection("legacyEvents")
-                    .insertOne(new Document("_id", "legacy-template"));
+                    .insertOne(new Document("template", true));
         }
         Path config = temp.resolve("shared-date-generation.yml");
         Files.writeString(config, """
@@ -588,12 +602,16 @@ class MongoGenerationIntegrationTest {
 
     private GenerationReport run(Endpoint sourceEndpoint, Endpoint targetEndpoint, Path config,
                                  boolean validateOnly, boolean allowUnprovenIds, Path report) {
+        return run(sourceEndpoint, targetEndpoint, config, new GenerationOptions(validateOnly, allowUnprovenIds), report);
+    }
+
+    private GenerationReport run(Endpoint sourceEndpoint, Endpoint targetEndpoint, Path config,
+                                 GenerationOptions options, Path report) {
         MongoGenerationSource source = new MongoGenerationSource(sourceEndpoint);
         MongoGenerationTarget target = new MongoGenerationTarget(targetEndpoint);
         GenerationOrchestrator service = new GenerationOrchestrator(source, target, new GenerationConfigReader(config),
                 new FileTemplateCatalogFactory(), new MongoGenerationBsonEngine(),
                 new JsonReportWriter(report), () -> false);
-        return service.generate(new GenerationCommand(sourceEndpoint, targetEndpoint,
-                new GenerationOptions(validateOnly, allowUnprovenIds)));
+        return service.generate(new GenerationCommand(sourceEndpoint, targetEndpoint, options));
     }
 }

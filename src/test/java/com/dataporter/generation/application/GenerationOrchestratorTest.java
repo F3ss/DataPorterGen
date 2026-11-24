@@ -1,6 +1,7 @@
 package com.dataporter.generation.application;
 
 import com.dataporter.adapters.snapshot.FileTemplateCatalogFactory;
+import com.dataporter.adapters.config.GenerationConfigReader;
 import com.dataporter.adapters.mongo.MongoGenerationBsonEngine;
 import com.dataporter.generation.domain.CollectionGenerationSpec;
 import com.dataporter.generation.domain.GenerationCommand;
@@ -30,14 +31,142 @@ import com.dataporter.shared.ports.out.BatchCursor;
 import org.bson.*;
 import org.bson.codecs.BsonDocumentCodec;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.math.BigInteger;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.TimeUnit;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class GenerationOrchestratorTest {
+    @Test void mismatchedFieldFormatStopsBeforeTargetConnection() {
+        FakeTarget target = new FakeTarget();
+        var spec = generationSpec(1, Map.of("/_id", new GenerationRule.ObjectId(RuleOptions.REQUIRED),
+                "/amount", new Literal("wrong-format", RuleOptions.REQUIRED)));
+        BsonPayload template = encode(new RawBsonDocument(defaultTemplate().bytes()).decode(new BsonDocumentCodec())
+                .append("amount", new BsonInt64(4178)));
+
+        Endpoint endpoint = command(false).source();
+        GenerationReport report = service(target, spec, false, false, template)
+                .generate(new GenerationCommand(endpoint, endpoint, new GenerationOptions(false, false)));
+
+        assertThat(report.status()).isEqualTo(OperationStatus.FAILED);
+        assertThat(report.safeToRetry()).isTrue();
+        assertThat(report.errors()).singleElement().satisfies(issue -> {
+            assertThat(issue.stage()).isEqualTo("VALIDATE_FIELD_FORMATS");
+            assertThat(issue.message()).contains("items/amount", "STRING", "INT64")
+                    .doesNotContain("wrong-format", "4178");
+        });
+        assertThat(target.connections).isZero();
+        assertThat(target.written).isZero();
+    }
+
+    @Test void updatesNestedFieldFormatsAndUsesThemInGeneration(@TempDir Path directory) throws Exception {
+        Path config = directory.resolve("generation.yml");
+        Files.writeString(config, """
+                version: 1
+                seed: 123
+                collections:
+                  - name: items
+                    count: 1
+                    fields:
+                      /amounts:
+                        kind: array
+                        length: 1
+                        items: { kind: randomNumber, bsonType: INT32, min: 5, max: 5 }
+                      /copied: { kind: ref, path: /amounts/0 }
+                      /date:
+                        kind: dateTime
+                        source: { kind: fixed, value: "2026-09-02T10:20:30.123Z" }
+                        output: BSON_DATE
+                      /uuid: { kind: uuid, output: STRING }
+                      /flag: { kind: literal, value: "false" }
+                      /rate: { kind: literal, value: 1.2300 }
+                """);
+        GenerationConfigReader reader = new GenerationConfigReader(config);
+        String originalHash = reader.read().configHash();
+        BsonPayload template = encode(new BsonDocument("_id", new BsonObjectId(new org.bson.types.ObjectId()))
+                .append("amounts", new BsonArray(List.of(BsonNull.VALUE, new BsonInt64(123))))
+                .append("copied", new BsonInt64(123))
+                .append("date", new BsonString("2020-01-01T00:00:00.000Z"))
+                .append("uuid", new BsonBinary(new UUID(0, 0))));
+        FakeTarget target = new FakeTarget();
+        var service = new GenerationOrchestrator(new FakeSource(template), target, reader,
+                (source, collections, max) -> catalogOf(template), new MongoGenerationBsonEngine(),
+                ignored -> {}, () -> false);
+
+        GenerationReport report = service.generate(formatOptions(true, true));
+
+        assertThat(report.status()).as(report.errors().toString()).isEqualTo(OperationStatus.SUCCESS);
+        assertThat(report.configHash()).isEqualTo(reader.read().configHash()).isNotEqualTo(originalHash);
+        assertThat(report.warnings()).anyMatch(warning -> warning.contains("field formats updated in 3 rule"));
+        assertThat(target.payloads).singleElement().satisfies(payload -> {
+            BsonDocument document = new RawBsonDocument(payload.bytes());
+            assertThat(document.getArray("amounts").getFirst()).isEqualTo(new BsonInt64(5));
+            assertThat(document.get("copied")).isEqualTo(new BsonInt64(5));
+            assertThat(document.getString("date").getValue()).isEqualTo("2026-09-02T10:20:30.123Z");
+            assertThat(document.getBinary("uuid").getType()).isEqualTo(BsonBinarySubType.UUID_STANDARD.getValue());
+            assertThat(document.get("flag")).isEqualTo(new BsonString("false"));
+            assertThat(document.getDecimal128("rate").getValue().toString()).isEqualTo("1.2300");
+        });
+    }
+
+    @Test void mixedSourceTypesPreventPartialConfigUpdateAndValidationCanBeDisabled(@TempDir Path directory) throws Exception {
+        Path config = directory.resolve("generation.json");
+        String original = """
+                {"version":1,"seed":123,"collections":[{"name":"items","count":2,"fields":{
+                  "/fixable":{"kind":"randomNumber","bsonType":"INT32","min":5,"max":5},
+                  "/mixed":{"kind":"literal","value":10}
+                }}]}
+                """;
+        Files.writeString(config, original);
+        BsonPayload first = encode(new BsonDocument("_id", new BsonObjectId(new org.bson.types.ObjectId()))
+                .append("fixable", new BsonInt64(5)).append("mixed", new BsonInt32(10)));
+        BsonPayload second = encode(new BsonDocument("_id", new BsonObjectId(new org.bson.types.ObjectId()))
+                .append("fixable", new BsonInt64(5)).append("mixed", new BsonString("10")));
+        FakeTarget target = new FakeTarget();
+        TemplateCatalogFactory catalogs = (source, collections, max) -> ordinalCatalog(2, ordinal -> ordinal == 0 ? first : second);
+
+        GenerationReport failed = new GenerationOrchestrator(new FakeSource(first), target, new GenerationConfigReader(config),
+                catalogs, new MongoGenerationBsonEngine(), ignored -> {}, () -> false).generate(formatOptions(true, true));
+
+        assertThat(failed.status()).isEqualTo(OperationStatus.FAILED);
+        assertThat(failed.errors()).singleElement().satisfies(issue ->
+                assertThat(issue.message()).contains("items/mixed", "source templates [INT32, STRING]"));
+        assertThat(Files.readString(config)).isEqualTo(original);
+        assertThat(target.connections).isZero();
+
+        GenerationReport bypassed = new GenerationOrchestrator(new FakeSource(first), target, new GenerationConfigReader(config),
+                catalogs, new MongoGenerationBsonEngine(), ignored -> {}, () -> false).generate(formatOptions(false, true));
+
+        assertThat(bypassed.status()).as(bypassed.errors().toString()).isEqualTo(OperationStatus.SUCCESS);
+        assertThat(Files.readString(config)).isEqualTo(original);
+        assertThat(target.payloads).hasSize(2).allSatisfy(payload ->
+                assertThat(new RawBsonDocument(payload.bytes()).get("fixable")).isEqualTo(new BsonInt32(5)));
+    }
+
+    @Test void crossCollectionReferenceUsesGeneratedIdTypeInsteadOfSourceIdType() {
+        var spec = new GenerationSpec(1, 123L, TemplateSelection.SHUFFLED_CYCLE, 1, 1, 10, 2, List.of(
+                new CollectionGenerationSpec("parents", 1, Map.of()),
+                new CollectionGenerationSpec("children", 1, Map.of(
+                        "/parentId", new Ref("parents", "/_id", MissingPolicy.ERROR, RuleOptions.REQUIRED)))), "hash");
+        BsonPayload template = encode(new BsonDocument("_id", new BsonInt32(1))
+                .append("parentId", new BsonInt32(2)));
+        var formats = new GenerationFieldFormats(spec, catalogOf(template), new MongoGenerationBsonEngine(), () -> false);
+
+        assertThatThrownBy(() -> formats.validate(spec)).isInstanceOf(ConfigurationException.class)
+                .hasMessageContaining("children/parentId: configured [INT64], source templates [INT32]");
+    }
+
+    private GenerationCommand formatOptions(boolean validate, boolean update) {
+        Endpoint endpoint = command(false).source();
+        return new GenerationCommand(endpoint, endpoint, new GenerationOptions(false, false, validate, update));
+    }
+
     @Test void emptyFilteredSnapshotFailsBeforeTargetConnection() {
         FakeTarget target = new FakeTarget();
         TemplateQuery query = new TemplateQuery(Map.of("required", Map.of("$exists", true)));
@@ -305,6 +434,9 @@ class GenerationOrchestratorTest {
         final List<Integer> batchSizes = java.util.Collections.synchronizedList(new ArrayList<>());
         final List<String> batchPaths = java.util.Collections.synchronizedList(new ArrayList<>());
         @Override public com.dataporter.generation.domain.TemplateFacts inspect(BsonPayload template) { return delegate.inspect(template); }
+        @Override public void collectFieldTypes(BsonPayload template, Map<String, Set<String>> fieldTypes) {
+            delegate.collectFieldTypes(template, fieldTypes);
+        }
         @Override public BsonPayload generate(String collection, long iteration, long seed, BsonPayload template,
                 Map<String, GenerationRule> fields, com.dataporter.generation.domain.ResolvedIdStrategy idStrategy,
                 Map<String, BsonPayload> sameIterationDocuments, Map<String, Long> sequenceStarts) {
@@ -718,7 +850,7 @@ class GenerationOrchestratorTest {
         }
     }
 
-    @Test void unprovenScalarIdRequiresFlagAndEffectiveLiteralStillFailsWithFlag() {
+    @Test void unprovenScalarIdRequiresFlag() {
         GenerationRule unproven = new WeightedChoice(List.of(
                 new Choice("same", 1)), RuleOptions.REQUIRED);
 
@@ -738,23 +870,50 @@ class GenerationOrchestratorTest {
         assertThat(allowed.warnings()).anyMatch(warning -> warning.contains("ID UNIQUENESS PROOF DISABLED"));
         assertThat(events.getFirst()).startsWith("warning:ID UNIQUENESS PROOF DISABLED");
         assertThat(events).contains("write");
+    }
 
+    @Test void constantScalarIdRequiresExplicitOptIn() {
         for (GenerationRule literal : List.of(
                 new Literal("fixed", RuleOptions.REQUIRED),
-                new Concat(List.of(new Literal("a", RuleOptions.REQUIRED),
-                        new Literal("b", RuleOptions.REQUIRED)), RuleOptions.REQUIRED),
+                new Concat(List.of(new Literal("fi", RuleOptions.REQUIRED),
+                        new Literal("xed", RuleOptions.REQUIRED)), RuleOptions.REQUIRED),
                 new Ref(null, "/fixed", MissingPolicy.ERROR, RuleOptions.REQUIRED))) {
-            Map<String,GenerationRule> fields = new LinkedHashMap<>();
-            fields.put("/fixed", new Literal("fixed", RuleOptions.REQUIRED));
-            fields.put("/_id", literal);
-            GenerationReport report = service(new FakeTarget(), generationSpec(1, fields), false)
+            GenerationSpec spec = generationSpec(1, Map.of(
+                    "/fixed", new Literal("fixed", RuleOptions.REQUIRED), "/_id", literal));
+
+            FakeTarget strictTarget = new FakeTarget();
+            GenerationReport strict = service(strictTarget, spec, false).generate(command(false));
+            assertThat(strict.status()).isEqualTo(OperationStatus.FAILED);
+            assertThat(strict.errors().getFirst().message()).contains("Cannot prove generated uniqueness");
+            assertThat(strictTarget.writeChecks).isZero();
+            assertThat(strictTarget.written).isZero();
+
+            FakeTarget debugTarget = new FakeTarget();
+            GenerationReport allowed = service(debugTarget, spec, false).generate(command(false, true));
+            assertThat(allowed.status()).as(allowed.errors().toString()).isEqualTo(OperationStatus.SUCCESS);
+            assertThat(debugTarget.payloads).singleElement().satisfies(payload ->
+                    assertThat(new RawBsonDocument(payload.bytes()).get("_id")).isEqualTo(new BsonString("fixed")));
+        }
+    }
+
+    @Test void flagStillRejectsNullAndNonScalarIdLiterals() {
+        for (GenerationRule invalidId : List.of(
+                new Literal(null, RuleOptions.REQUIRED),
+                new Literal(List.of("fixed"), RuleOptions.REQUIRED),
+                new Literal(Map.of("key", "fixed"), RuleOptions.REQUIRED))) {
+            FakeTarget target = new FakeTarget();
+            GenerationReport report = service(target, generationSpec(1, Map.of("/_id", invalidId)), false)
                     .generate(command(false, true));
+
             assertThat(report.status()).isEqualTo(OperationStatus.FAILED);
+            assertThat(report.errors().getFirst().message()).contains("must be non-null scalars");
+            assertThat(target.writeChecks).isZero();
+            assertThat(target.written).isZero();
         }
     }
 
     @Test void allowUnprovenIdsDoesNotRelaxSecondaryUniqueOrUnsupportedIndexChecks() {
-        GenerationRule unproven = new WeightedChoice(List.of(new Choice("same", 1)), RuleOptions.REQUIRED);
+        GenerationRule unproven = new Literal("same", RuleOptions.REQUIRED);
         GenerationSpec spec = generationSpec(2, Map.of("/_id", unproven, "/code", new Literal("x", RuleOptions.REQUIRED)));
 
         FakeTarget secondary = new FakeTarget();
@@ -954,8 +1113,9 @@ class GenerationOrchestratorTest {
     }
     private GenerationCommand command(boolean validateOnly, boolean allowUnprovenIds) {
         Endpoint endpoint = new Endpoint("mongodb://same:27017", "catalog");
+        // These fixtures exercise ID strategies independently of the type observed in the template.
         return new GenerationCommand(endpoint, endpoint,
-                new GenerationOptions(validateOnly, allowUnprovenIds));
+                new GenerationOptions(validateOnly, allowUnprovenIds, false, false));
     }
     private BsonPayload encode(BsonDocument document) {
         RawBsonDocument raw = new RawBsonDocument(document, new BsonDocumentCodec());

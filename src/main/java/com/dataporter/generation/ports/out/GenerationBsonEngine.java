@@ -13,6 +13,8 @@ import java.util.Set;
 
 public interface GenerationBsonEngine {
     TemplateFacts inspect(BsonPayload template);
+    /** Adds BSON types for the requested pointers, using ~2 as the array-item segment. */
+    void collectFieldTypes(BsonPayload template, Map<String, Set<String>> fieldTypes);
     BsonPayload generate(String collection, long iteration, long seed, BsonPayload template,
                          Map<String, GenerationRule> fields, ResolvedIdStrategy idStrategy,
                          Map<String, BsonPayload> sameIterationDocuments,

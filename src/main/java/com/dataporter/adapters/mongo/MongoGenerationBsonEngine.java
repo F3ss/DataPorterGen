@@ -27,6 +27,11 @@ public final class MongoGenerationBsonEngine implements GenerationBsonEngine {
         return inspector.inspect(template);
     }
 
+    @Override public void collectFieldTypes(BsonPayload template, Map<String, Set<String>> fieldTypes) {
+        BsonDocument document = MongoBson.decode(template);
+        fieldTypes.forEach((pointer, types) -> paths.collectTypes(document, pointer, types));
+    }
+
     @Override public BsonPayload generate(String collection, long iteration, long seed, BsonPayload template,
                                          Map<String, GenerationRule> fields, ResolvedIdStrategy idStrategy,
                                          Map<String, BsonPayload> sameIterationDocuments,

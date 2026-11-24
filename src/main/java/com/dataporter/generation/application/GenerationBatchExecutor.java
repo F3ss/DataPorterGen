@@ -61,7 +61,7 @@ final class GenerationBatchExecutor {
                     documents += total.generated();
                 }
                 received++;
-                progress.progress(generationId, GenerationOrchestrator.STAGES.get(10), documents, plannedDocuments);
+                progress.progress(generationId, GenerationOrchestrator.GENERATE_AND_APPEND, documents, plannedDocuments);
                 if (submitted < blocks)
                     completed.submit(blockTask(spec, seed, catalog, ids, randomStringIds, starts, keepSets, secondaryConstraints,
                             submitted++ * spec.batchSize(), iterations, writeAttempted));

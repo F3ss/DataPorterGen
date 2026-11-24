@@ -74,27 +74,38 @@ final class GenerationPreflight {
     private void resolveStrategies(GenerationSpec spec, TemplateCatalog catalog,
                                    Map<String,ResolvedIdStrategy> ids, Map<String,Long> sequenceStarts) {
         for (CollectionGenerationSpec collection : spec.collections()) {
-            ResolvedIdStrategy strategy;
-            if (collection.fields().containsKey("/_id")) strategy = ResolvedIdStrategy.explicit();
-            else {
-                Set<TemplateFacts.IdKind> kinds = EnumSet.noneOf(TemplateFacts.IdKind.class);
-                Set<String> equal = null;
-                for (long i = 0; i < catalog.count(collection.name()); i++) {
-                    TemplateFacts facts = bson.inspect(catalog.get(collection.name(), i)); kinds.add(facts.idKind());
-                    equal = equal == null ? new LinkedHashSet<>(facts.scalarPathsEqualToId()) : intersection(equal, facts.scalarPathsEqualToId());
-                }
-                if (equal != null && equal.size() == 1) strategy = new ResolvedIdStrategy(ResolvedIdStrategy.Kind.FIELD_REFERENCE, equal.iterator().next(), 0);
-                else if (kinds.equals(Set.of(TemplateFacts.IdKind.OBJECT_ID))) strategy = new ResolvedIdStrategy(ResolvedIdStrategy.Kind.DETERMINISTIC_OBJECT_ID, "", 0);
-                else if (kinds.equals(Set.of(TemplateFacts.IdKind.UUID))) strategy = new ResolvedIdStrategy(ResolvedIdStrategy.Kind.DETERMINISTIC_UUID, "", 0);
-                else if (!kinds.isEmpty() && kinds.stream().allMatch(k -> k == TemplateFacts.IdKind.INT32 || k == TemplateFacts.IdKind.INT64)) {
-                    long start = target.nextSequenceStart(collection.name(), "/_id", 1);
-                    validateSequenceEnd(collection.name(), collection.count(), start, 1);
-                    strategy = new ResolvedIdStrategy(ResolvedIdStrategy.Kind.NUMERIC_SEQUENCE, "", start);
-                } else throw new ConfigurationException("Collection " + collection.name() + " requires an explicit /_id generation rule");
+            ResolvedIdStrategy strategy = collection.fields().containsKey("/_id")
+                    ? ResolvedIdStrategy.explicit() : templateIdStrategy(collection.name(), catalog, bson, cancellation);
+            if (strategy.kind() == ResolvedIdStrategy.Kind.NUMERIC_SEQUENCE) {
+                long start = target.nextSequenceStart(collection.name(), "/_id", 1);
+                validateSequenceEnd(collection.name(), collection.count(), start, 1);
+                strategy = new ResolvedIdStrategy(ResolvedIdStrategy.Kind.NUMERIC_SEQUENCE, "", start);
             }
             ids.put(collection.name(), strategy);
             collection.fields().forEach((path, rule) -> collectSequenceStarts(collection.name(), collection.count(), path, rule, sequenceStarts));
         }
+    }
+
+    static ResolvedIdStrategy templateIdStrategy(String collection, TemplateCatalog catalog,
+                                                GenerationBsonEngine bson, CancellationToken cancellation) {
+        Set<TemplateFacts.IdKind> kinds = EnumSet.noneOf(TemplateFacts.IdKind.class);
+        Set<String> equal = null;
+        for (long i = 0, count = catalog.count(collection); i < count; i++) {
+            if (cancellation.isCancellationRequested()) throw new OperationCancelledException();
+            TemplateFacts facts = bson.inspect(catalog.get(collection, i));
+            kinds.add(facts.idKind());
+            if (equal == null) equal = new LinkedHashSet<>(facts.scalarPathsEqualToId());
+            else equal.retainAll(facts.scalarPathsEqualToId());
+        }
+        if (equal != null && equal.size() == 1)
+            return new ResolvedIdStrategy(ResolvedIdStrategy.Kind.FIELD_REFERENCE, equal.iterator().next(), 0);
+        if (kinds.equals(Set.of(TemplateFacts.IdKind.OBJECT_ID)))
+            return new ResolvedIdStrategy(ResolvedIdStrategy.Kind.DETERMINISTIC_OBJECT_ID, "", 0);
+        if (kinds.equals(Set.of(TemplateFacts.IdKind.UUID)))
+            return new ResolvedIdStrategy(ResolvedIdStrategy.Kind.DETERMINISTIC_UUID, "", 0);
+        if (!kinds.isEmpty() && kinds.stream().allMatch(k -> k == TemplateFacts.IdKind.INT32 || k == TemplateFacts.IdKind.INT64))
+            return new ResolvedIdStrategy(ResolvedIdStrategy.Kind.NUMERIC_SEQUENCE, "", 0);
+        throw new ConfigurationException("Collection " + collection + " requires an explicit /_id generation rule");
     }
     private void collectSequenceStarts(String collection, long count, String path, GenerationRule rule, Map<String,Long> starts) {
         if (rule instanceof Sequence sequence && sequence.start() == SequenceStart.AUTO_AFTER_TARGET_MAX)
@@ -266,8 +277,8 @@ final class GenerationPreflight {
                 if (!provenSafe) {
                     boolean idFallback = constraint.name().equals("_id_")
                             && ids.get(collection.name()).kind() == ResolvedIdStrategy.Kind.EXPLICIT
-                            && (randomAnalyses.getOrDefault(collection.name(), IdRandomnessAnalyzer.Analysis.none()).hasGuaranteedRandom()
-                            || allowUnprovenIds && !idRandomness.effectivelyLiteral(collection));
+                            && (allowUnprovenIds
+                            || randomAnalyses.getOrDefault(collection.name(), IdRandomnessAnalyzer.Analysis.none()).hasGuaranteedRandom());
                     if (!idFallback)
                         throw new TargetPreparationException("Cannot prove generated uniqueness for target index "
                                 + collection.name() + "." + constraint.name());
@@ -376,7 +387,7 @@ final class GenerationPreflight {
                 try { completed.addAndGet(result.get()); }
                 catch (ExecutionException e) { throw unwrap(e.getCause()); }
                 catch (InterruptedException e) { Thread.currentThread().interrupt(); throw new OperationCancelledException(); }
-                progress.progress(generationId, GenerationOrchestrator.STAGES.get(8), completed.get(), iterations);
+                progress.progress(generationId, GenerationOrchestrator.VALIDATE_GENERATION_RULES, completed.get(), iterations);
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -457,7 +468,6 @@ final class GenerationPreflight {
 
     private void checkCancelled() { if (cancellation.isCancellationRequested()) throw new OperationCancelledException(); }
     private static RuntimeException unwrap(Throwable error) { return error instanceof RuntimeException runtime ? runtime : new GenerationException("Generation worker failed", error); }
-    private static Set<String> intersection(Set<String> left, Set<String> right) { left.retainAll(right); return left; }
 
     record RandomStringId(String path, RandomString rule) { }
 }

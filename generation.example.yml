@@ -1,3 +1,4 @@
+# BSON formats are checked by default. Use GENERATION_UPDATE_FIELD_FORMATS=true to update compatible rules in this file.
 version: 1
 seed: 12345
 templateSelection: SHUFFLED_CYCLE

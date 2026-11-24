@@ -52,13 +52,15 @@ public class DataPorterGenApplication {
                   --migration.mode=GENERATE
                   --migration.generation.config-path=./generation.yml
                   --migration.generation.validate-only=false
-                  --migration.generation.allow-unproven-ids=false
+                  --migration.generation.allow-unproven-ids=false (set true to allow a constant _id)
+                  --migration.generation.validate-field-formats=true
+                  --migration.generation.update-field-formats=false
                 Environment equivalents include SOURCE_MONGODB_URI, SOURCE_DATABASE,
                 TARGET_MONGODB_URI, TARGET_DATABASE, TARGET_STRATEGY,
                 VERIFICATION_LEVEL,
                 INCLUDE_COLLECTIONS, EXCLUDE_COLLECTIONS, MIGRATION_MODE,
-                GENERATION_CONFIG_PATH, GENERATION_VALIDATE_ONLY and
-                GENERATION_ALLOW_UNPROVEN_IDS.
+                GENERATION_CONFIG_PATH, GENERATION_VALIDATE_ONLY, GENERATION_ALLOW_UNPROVEN_IDS,
+                GENERATION_VALIDATE_FIELD_FORMATS and GENERATION_UPDATE_FIELD_FORMATS.
                 """;
     }
 

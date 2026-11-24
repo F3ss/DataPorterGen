@@ -3,7 +3,6 @@ package com.dataporter.generation.application;
 import com.dataporter.generation.domain.CollectionGenerationSpec;
 import com.dataporter.generation.domain.GenerationRule;
 import com.dataporter.generation.domain.GenerationRule.Concat;
-import com.dataporter.generation.domain.GenerationRule.Literal;
 import com.dataporter.generation.domain.GenerationRule.ObjectValue;
 import com.dataporter.generation.domain.GenerationRule.RandomAlphaNumStringBetween;
 import com.dataporter.generation.domain.GenerationRule.RandomString;
@@ -22,11 +21,6 @@ final class IdRandomnessAnalyzer {
         boolean weighted = collect(collection.name(), id, "/_id", collections, new HashSet<>(), sources);
         boolean guaranteed = guaranteesRandom(collection.name(), id, collections, new HashSet<>());
         return new Analysis(List.copyOf(sources.values()), guaranteed, weighted);
-    }
-
-    boolean effectivelyLiteral(CollectionGenerationSpec collection) {
-        GenerationRule id = collection.fields().get("/_id");
-        return id != null && effectivelyLiteral(id, collection, new HashSet<>());
     }
 
     private boolean collect(String owner, GenerationRule rule, String evaluationPath,
@@ -91,22 +85,6 @@ final class IdRandomnessAnalyzer {
                         collections, visitingRefs);
             } finally {
                 visitingRefs.remove(key);
-            }
-        }
-        return false;
-    }
-
-    private boolean effectivelyLiteral(GenerationRule rule, CollectionGenerationSpec collection,
-                                       Set<String> visitingRefs) {
-        if (rule instanceof Literal) return true;
-        if (rule instanceof Concat concat)
-            return concat.parts().stream().allMatch(part -> effectivelyLiteral(part, collection, visitingRefs));
-        if (rule instanceof Ref ref && ref.collection() == null && visitingRefs.add(ref.path())) {
-            try {
-                ResolvedRule resolved = resolve(collection, ref.path());
-                return resolved != null && effectivelyLiteral(resolved.rule(), collection, visitingRefs);
-            } finally {
-                visitingRefs.remove(ref.path());
             }
         }
         return false;
