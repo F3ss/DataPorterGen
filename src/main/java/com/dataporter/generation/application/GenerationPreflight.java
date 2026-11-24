@@ -148,7 +148,8 @@ final class GenerationPreflight {
         if (path == null || !seen.add(path)) return null;
         GenerationRule rule = fields.get(path);
         if (rule instanceof RandomString randomString) return new RandomStringId(path, randomString);
-        if (rule instanceof Ref ref && ref.collection() == null) return randomStringId(ref.path(), fields, seen);
+        if (rule instanceof Ref ref && ref.bsonType() == null && ref.collection() == null)
+            return randomStringId(ref.path(), fields, seen);
         if (path.equals("/_id") && rule instanceof Concat concat)
             return compositeRandomStringId(concat, fields);
         return null;
@@ -173,7 +174,7 @@ final class GenerationPreflight {
     private RandomStringId randomStringComponent(GenerationRule rule, String evaluationPath,
                                                    Map<String,GenerationRule> fields, Set<String> seen) {
         if (rule instanceof RandomString randomString) return new RandomStringId(evaluationPath, randomString);
-        if (!(rule instanceof Ref ref) || ref.collection() != null || ref.onMissing() != MissingPolicy.ERROR
+        if (!(rule instanceof Ref ref) || ref.bsonType() != null || ref.collection() != null || ref.onMissing() != MissingPolicy.ERROR
                 || !seen.add(ref.path())) return null;
         GenerationRule referenced = fields.get(ref.path());
         if (referenced == null) return null;
@@ -311,6 +312,8 @@ final class GenerationPreflight {
         if (!seen.add(rule) || rule.options().nullProbability() > 0 || rule.options().omitProbability() > 0) return false;
         if (rule instanceof Sequence || rule instanceof GenerationRule.ObjectId || rule instanceof Uuid) return true;
         if (rule instanceof Ref ref) {
+            // Distinct source values can collapse after conversion, e.g. "00123" and "123".
+            if (ref.bsonType() != null) return false;
             if (ref.collection() != null) return proven.getOrDefault(ref.collection(), Set.of()).contains(ref.path());
             if (batchUniqueRandomStringPath != null
                     && (ref.path().equals("/_id") || ref.path().equals(batchUniqueRandomStringPath))) return true;
@@ -446,7 +449,7 @@ final class GenerationPreflight {
         if (rule instanceof GenerationRule.ObjectId) return new GenerationRule.ObjectId(required);
         if (rule instanceof Uuid v) return new Uuid(v.output(), required);
         if (rule instanceof DateTime v) return new DateTime(v.source(), v.output(), v.pattern(), v.zone(), v.locale(), required);
-        if (rule instanceof Ref v) return new Ref(v.collection(), v.path(), v.onMissing(), required);
+        if (rule instanceof Ref v) return new Ref(v.collection(), v.path(), v.onMissing(), v.bsonType(), required);
         if (rule instanceof Concat v) return new Concat(v.parts().stream().map(this::coverageRule).toList(), required);
         if (rule instanceof Array v) {
             int length = v.length().max() == 0 ? 0 : 1;

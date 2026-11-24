@@ -238,9 +238,12 @@ public final class GenerationConfigReader implements GenerationSpecReader {
                         optionalText(node, "locale", "ROOT", at), options);
             }
             case "ref" -> {
-                unknown(node, at, "kind", "collection", "path", "onMissing", "nullProbability", "omitProbability");
+                unknown(node, at, "kind", "collection", "path", "onMissing", "bsonType", "nullProbability", "omitProbability");
+                RefBsonType bsonType = node.has("bsonType")
+                        ? enumValue(RefBsonType.class, requiredText(node, "bsonType", at), at + ".bsonType") : null;
                 yield new Ref(optionalText(node, "collection", null, at), requiredText(node, "path", at),
-                        enumValue(MissingPolicy.class, optionalText(node, "onMissing", "ERROR", at), at + ".onMissing"), options);
+                        enumValue(MissingPolicy.class, optionalText(node, "onMissing", "ERROR", at), at + ".onMissing"),
+                        bsonType, options);
             }
             case "concat" -> {
                 unknown(node, at, "kind", "parts", "nullProbability", "omitProbability");

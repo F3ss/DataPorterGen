@@ -45,10 +45,15 @@ equal(orders.map(item => item.staticValue), ["ORDER_TEMPLATE", "ORDER_TEMPLATE",
 for (let i = 0; i < orders.length; i++) {
   if (canonical(orders[i].customerId) !== canonical(customers[i]._id))
     fail("cross-collection customerId reference differs at iteration " + i);
+  if (Number(orders[i].customerOrdinal) !== Number(customers[i].ordinal))
+    fail("converted customerOrdinal reference differs at iteration " + i);
 }
+if (catalog.orders.countDocuments({ generated: true, customerOrdinal: { $type: "int" } }) !== orders.length)
+  fail("converted customerOrdinal is not BSON int32");
 if (!orders.every(item => canonical(item.operationDate) === canonical(ISODate("2026-09-02T10:20:30.123Z"))))
   fail("order shared BSON date differs");
-if (!orders.every(item => item.legacyDate === "1260902")) fail("order shared legacy date differs");
+if (catalog.orders.countDocuments({ generated: true, legacyDate: { $type: "double", $eq: 1260902 } }) !== orders.length)
+  fail("order shared legacy date differs");
 
 equal(indexNames(catalog.customers), ["_id_", "customers_ordinal_unique"], "customer indexes changed");
 equal(indexNames(catalog.orders), ["_id_", "orders_customer_unique", "orders_sequence_unique"], "order indexes changed");

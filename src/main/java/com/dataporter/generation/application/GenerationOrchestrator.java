@@ -166,6 +166,11 @@ public final class GenerationOrchestrator {
             }
         } catch (OperationCancelledException e) {
             status = OperationStatus.CANCELLED; errors.add(issue(stage[0], e));
+        } catch (GenerationFieldFormats.ValidationException e) {
+            status = OperationStatus.FAILED;
+            for (var mismatch : e.mismatches())
+                errors.add(new OperationIssue(stage[0], SecretMasker.redact(mismatch.field()),
+                        mismatch.message(), e.failureKind()));
         } catch (RuntimeException e) {
             status = OperationStatus.FAILED; errors.add(issue(stage[0], e));
         } finally {

@@ -50,7 +50,7 @@ final class IdRandomnessAnalyzer {
                         evaluationPath + "/choice" + i, collections, visitingRefs, sources);
             return nestedWeighted;
         }
-        if (rule instanceof Ref ref) {
+        if (rule instanceof Ref ref && ref.bsonType() == null) {
             String referencedCollection = ref.collection() == null ? owner : ref.collection();
             String key = referencedCollection + "\0" + ref.path();
             if (!visitingRefs.add(key)) return false;
@@ -75,7 +75,7 @@ final class IdRandomnessAnalyzer {
         if (rule instanceof WeightedChoice choice)
             return choice.choices().stream().allMatch(item ->
                     guaranteesRandom(owner, item.value(), collections, visitingRefs));
-        if (rule instanceof Ref ref) {
+        if (rule instanceof Ref ref && ref.bsonType() == null) {
             String referencedCollection = ref.collection() == null ? owner : ref.collection();
             String key = referencedCollection + "\0" + ref.path();
             if (!visitingRefs.add(key)) return false;

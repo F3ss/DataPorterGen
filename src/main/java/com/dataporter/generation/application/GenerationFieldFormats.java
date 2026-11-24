@@ -8,7 +8,9 @@ import com.dataporter.generation.domain.GenerationSpec;
 import com.dataporter.generation.domain.ResolvedIdStrategy;
 import com.dataporter.generation.ports.out.GenerationBsonEngine;
 import com.dataporter.generation.ports.out.TemplateCatalog;
+import com.dataporter.shared.domain.FailureKind;
 import com.dataporter.shared.error.ConfigurationException;
+import com.dataporter.shared.error.DataPorterException;
 import com.dataporter.shared.error.OperationCancelledException;
 import com.dataporter.shared.ports.out.CancellationToken;
 
@@ -19,6 +21,20 @@ import java.util.*;
 final class GenerationFieldFormats {
     private record RuleSite(String collection, String fieldPointer, String configPointer, GenerationRule rule) {}
     private record Reference(String collection, Ref rule) {}
+    record Mismatch(String field, String message) {}
+
+    static final class ValidationException extends DataPorterException {
+        private final List<Mismatch> mismatches;
+
+        ValidationException(List<Mismatch> mismatches) {
+            super("BSON field format mismatches: " + mismatches.size());
+            this.mismatches = List.copyOf(mismatches);
+        }
+
+        List<Mismatch> mismatches() { return mismatches; }
+
+        @Override public FailureKind failureKind() { return FailureKind.CONFIGURATION; }
+    }
 
     private final Map<String, Map<String, Set<String>>> observed = new LinkedHashMap<>();
     private final Map<String, ResolvedIdStrategy> referencedIds = new HashMap<>();
@@ -31,7 +47,7 @@ final class GenerationFieldFormats {
             if (!collection.fields().containsKey("/_id")) implicitIds.add(collection.name());
         for (RuleSite site : sites(spec)) {
             request(site.collection(), site.fieldPointer());
-            if (site.rule() instanceof Ref ref) {
+            if (site.rule() instanceof Ref ref && ref.bsonType() == null) {
                 request(referencedCollection(site.collection(), ref), ref.path());
                 if (ref.collection() != null && ref.path().equals("/_id") && implicitIds.contains(ref.collection()))
                     referencedIds.computeIfAbsent(ref.collection(), name ->
@@ -70,13 +86,16 @@ final class GenerationFieldFormats {
                         .computeIfAbsent(site.fieldPointer(), ignored -> new HashSet<>()).addAll(generated);
             }
         }
+        List<Mismatch> mismatches = new ArrayList<>();
         outputs.forEach((collection, fields) -> fields.forEach((pointer, generated) -> {
             Set<String> actual = observed(collection, pointer);
-            if (!actual.equals(generated))
-                throw new ConfigurationException("BSON field format mismatch in " + collection
-                        + pointer.replace("/~2", "/[]") + ": configured " + new TreeSet<>(generated)
-                        + ", source templates " + new TreeSet<>(actual));
+            if (!actual.equals(generated)) {
+                String field = collection + pointer.replace("/~2", "/[]");
+                mismatches.add(new Mismatch(field, "BSON field format mismatch in " + field
+                        + ": configured " + new TreeSet<>(generated) + ", source templates " + new TreeSet<>(actual)));
+            }
         }));
+        if (!mismatches.isEmpty()) throw new ValidationException(mismatches);
     }
 
     private Set<String> outputTypes(GenerationRule rule, String collection, String relative,
@@ -88,6 +107,7 @@ final class GenerationFieldFormats {
             return types;
         }
         if (rule instanceof Ref ref) {
+            if (ref.bsonType() != null) return relative.isEmpty() ? Set.of(ref.bsonType().name()) : Set.of();
             String referenced = referencedCollection(collection, ref);
             String path = ref.path() + relative;
             Reference reference = new Reference(collection, ref);
@@ -149,7 +169,11 @@ final class GenerationFieldFormats {
             case RandomBoolean ignored -> Set.of("BOOLEAN");
             case ObjectId ignored -> Set.of("OBJECT_ID");
             case Uuid uuid -> Set.of(uuid.output() == UuidOutput.STRING ? "STRING" : "UUID");
-            case DateTime date -> Set.of(date.output() == DateOutput.STRING ? "STRING" : "DATE_TIME");
+            case DateTime date -> Set.of(switch (date.output()) {
+                case BSON_DATE -> "DATE_TIME";
+                case STRING -> "STRING";
+                case DOUBLE -> "DOUBLE";
+            });
             case Concat ignored -> Set.of("STRING");
             case Array ignored -> Set.of("ARRAY");
             case ObjectValue ignored -> Set.of("DOCUMENT");

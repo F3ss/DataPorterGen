@@ -40,6 +40,7 @@ collections:
           - { kind: literal, value: "ORD-" }
           - { kind: ref, path: /sequence }
       /customerId: { kind: ref, collection: customers, path: /_id }
+      /customerOrdinal: { kind: ref, collection: customers, path: /ordinal, bsonType: INT32 }
       /operationDate:
         kind: dateTime
         source: { kind: shared, name: operationDate }
@@ -47,6 +48,6 @@ collections:
       /legacyDate:
         kind: dateTime
         source: { kind: shared, name: operationDate }
-        output: STRING
+        output: DOUBLE
         pattern: "'1'yyMMdd"
       /generated: { kind: literal, value: true }

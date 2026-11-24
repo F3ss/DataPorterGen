@@ -31,6 +31,7 @@ final class BsonRuleEvaluator {
     // The same fields map instance is passed for every iteration of a collection; order depends only on it.
     private final Map<Map<String, GenerationRule>, List<String>> evaluationOrderCache =
             Collections.synchronizedMap(new IdentityHashMap<>());
+    private final Map<DateTime, DateTimeFormatter> dateFormatters = new ConcurrentHashMap<>();
     private final BsonPointerOperations paths;
 
     BsonRuleEvaluator(BsonPointerOperations paths) { this.paths = paths; }
@@ -90,7 +91,16 @@ final class BsonRuleEvaluator {
             UUID value = uuid(seed, collection, iteration, coordinate);
             return uuid.output() == UuidOutput.STRING ? new BsonString(value.toString()) : new BsonBinary(value);
         }
-        if (rule instanceof Ref ref) return reference(ref.collection(), ref.path(), ref.onMissing(), current, other);
+        if (rule instanceof Ref ref) {
+            Object value = reference(ref.collection(), ref.path(), ref.onMissing(), current, other);
+            if (ref.bsonType() == null || value == OMIT || value instanceof BsonNull) return value;
+            try {
+                return convertRef((BsonValue) value, ref.bsonType());
+            } catch (IllegalArgumentException | ArithmeticException e) {
+                throw new GenerationException("Cannot convert ref to BSON " + ref.bsonType()
+                        + " in " + collection + path + " at iteration " + iteration);
+            }
+        }
         if (rule instanceof Concat concat) {
             StringBuilder value = new StringBuilder();
             int i = 0;
@@ -113,8 +123,14 @@ final class BsonRuleEvaluator {
             Instant instant = dateInstant(date.source(), seed, collection, iteration, coordinate, current, other,
                     sharedDates);
             if (date.output() == DateOutput.BSON_DATE) return new BsonDateTime(instant.toEpochMilli());
-            Locale locale = "ROOT".equals(date.locale()) ? Locale.ROOT : new Locale.Builder().setLanguageTag(date.locale()).build();
-            return new BsonString(DateTimeFormatter.ofPattern(date.pattern(), locale).withZone(ZoneId.of(date.zone())).format(instant));
+            String formatted = dateFormatters.computeIfAbsent(date, BsonRuleEvaluator::dateFormatter).format(instant);
+            if (date.output() == DateOutput.STRING) return new BsonString(formatted);
+            try {
+                return new BsonDouble(exactDouble(new BigDecimal(formatted)));
+            } catch (IllegalArgumentException | ArithmeticException e) {
+                throw new GenerationException("dateTime pattern must produce an exact BSON DOUBLE in "
+                        + collection + path + " at iteration " + iteration);
+            }
         }
         if (rule instanceof Array array) {
             int length = betweenInt(seed, collection, iteration, coordinate + "#length",
@@ -178,6 +194,58 @@ final class BsonRuleEvaluator {
             case NULL -> BsonNull.VALUE;
             case OMIT -> OMIT;
         };
+    }
+
+    private static BsonValue convertRef(BsonValue value, RefBsonType type) {
+        if (type == RefBsonType.STRING) {
+            return switch (value.getBsonType()) {
+                case STRING -> value;
+                case INT32, INT64 -> new BsonString(scalarString(value));
+                case DOUBLE -> new BsonString(Double.toString(finiteDouble(value.asDouble().getValue())));
+                case DECIMAL128 -> {
+                    Decimal128 decimal = value.asDecimal128().getValue();
+                    if (!decimal.isFinite()) throw new ArithmeticException();
+                    yield new BsonString(decimal.toString());
+                }
+                default -> throw new IllegalArgumentException();
+            };
+        }
+        if (type == RefBsonType.DOUBLE && value.isDouble()) {
+            finiteDouble(value.asDouble().getValue());
+            return value;
+        }
+        BigDecimal decimal = switch (value.getBsonType()) {
+            case STRING -> new BigDecimal(value.asString().getValue());
+            case INT32 -> BigDecimal.valueOf(value.asInt32().getValue());
+            case INT64 -> BigDecimal.valueOf(value.asInt64().getValue());
+            case DOUBLE -> new BigDecimal(value.asDouble().getValue());
+            case DECIMAL128 -> new BigDecimal(value.asDecimal128().getValue().toString());
+            default -> throw new IllegalArgumentException();
+        };
+        return switch (type) {
+            case INT32 -> new BsonInt32(decimal.intValueExact());
+            case INT64 -> new BsonInt64(decimal.longValueExact());
+            case DOUBLE -> new BsonDouble(exactDouble(decimal));
+            case STRING -> throw new IllegalStateException("Expected a numeric ref type");
+        };
+    }
+
+    private static double exactDouble(BigDecimal decimal) {
+        double converted = finiteDouble(decimal.doubleValue());
+        // BigDecimal.valueOf would round-trip the printed double, hiding binary rounding.
+        if (decimal.compareTo(new BigDecimal(converted)) != 0) throw new ArithmeticException();
+        return converted;
+    }
+
+    private static double finiteDouble(double value) {
+        if (!Double.isFinite(value)) throw new ArithmeticException();
+        return value;
+    }
+
+    private static DateTimeFormatter dateFormatter(DateTime date) {
+        Locale locale = "ROOT".equals(date.locale()) ? Locale.ROOT
+                : new Locale.Builder().setLanguageTag(date.locale()).build();
+        return DateTimeFormatter.ofPattern(date.pattern(), locale).withZone(ZoneId.of(date.zone()));
     }
 
     private Instant dateInstant(DateSource source, long seed, String collection, long iteration, String path,

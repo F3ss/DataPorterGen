@@ -6,6 +6,7 @@ import com.dataporter.generation.domain.GenerationRule;
 import com.dataporter.generation.domain.ResolvedIdStrategy;
 import com.dataporter.generation.domain.SharedDateDefinition;
 import com.dataporter.generation.domain.UnconfiguredFields;
+import com.dataporter.generation.domain.error.GenerationException;
 import com.dataporter.shared.bson.BsonPayload;
 
 import org.bson.*;
@@ -18,6 +19,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class MongoGenerationBsonEngineTest {
     @Test void yamlIntegerLiteralsUseRangeAppropriateBsonTypesRecursively(@TempDir Path temp) throws Exception {
@@ -73,8 +75,10 @@ class MongoGenerationBsonEngineTest {
                 "/createdText", new DateTime(new SharedDateRef("operationDate"), DateOutput.STRING,
                         "uuuu-MM-dd'T'HH:mm:ss.SSSX", "UTC", "ROOT", RuleOptions.REQUIRED));
         Map<String, GenerationRule> legacyFields = Map.of(
-                "/legacyDate", new DateTime(new SharedDateRef("operationDate"), DateOutput.STRING,
-                        "'1'yyMMdd", "UTC", "ROOT", RuleOptions.REQUIRED));
+                "/legacyDate", new DateTime(new SharedDateRef("operationDate"), DateOutput.DOUBLE,
+                        "'1'yyMMdd", "UTC", "ROOT", RuleOptions.REQUIRED),
+                "/day", new DateTime(new SharedDateRef("operationDate"), DateOutput.STRING,
+                        "uuuu-MM-dd", "Pacific/Honolulu", "ROOT", RuleOptions.REQUIRED));
 
         BsonDocument event = decode(engine.generate("events", 7, 99, template, eventFields,
                 ResolvedIdStrategy.explicit(), Map.of(), Map.of(), sharedDates, null, 1, null, UnconfiguredFields.SNAPSHOT));
@@ -83,7 +87,75 @@ class MongoGenerationBsonEngineTest {
 
         assertThat(event.getDateTime("createdAt").getValue()).isEqualTo(1_788_344_430_123L);
         assertThat(event.getString("createdText").getValue()).isEqualTo("2026-09-02T10:20:30.123Z");
-        assertThat(legacy.getString("legacyDate").getValue()).isEqualTo("1260902");
+        assertThat(legacy.getDouble("legacyDate").getValue()).isEqualTo(1_260_902.0);
+        assertThat(legacy.getString("day").getValue()).isEqualTo("2026-09-02");
+    }
+
+    @Test void typedRefsConvertSameIterationValuesAndPreserveMissingPolicies() {
+        var engine = new MongoGenerationBsonEngine();
+        BsonPayload parent = encode(BsonDocument.parse("{_id: 1, code: '123', nil: null}"));
+        BsonPayload template = encode(BsonDocument.parse("{_id: 1, omitted: 'remove me'}"));
+        Map<String, GenerationRule> fields = Map.of(
+                "/asInt", new Ref("parent", "/code", MissingPolicy.ERROR, RefBsonType.INT32, RuleOptions.REQUIRED),
+                "/asLong", new Ref("parent", "/code", MissingPolicy.ERROR, RefBsonType.INT64, RuleOptions.REQUIRED),
+                "/asDouble", new Ref("parent", "/code", MissingPolicy.ERROR, RefBsonType.DOUBLE, RuleOptions.REQUIRED),
+                "/asString", new Ref(null, "/asInt", MissingPolicy.ERROR, RefBsonType.STRING, RuleOptions.REQUIRED),
+                "/nil", new Ref("parent", "/nil", MissingPolicy.ERROR, RefBsonType.INT32, RuleOptions.REQUIRED),
+                "/missing", new Ref("parent", "/missing", MissingPolicy.NULL, RefBsonType.INT32, RuleOptions.REQUIRED),
+                "/omitted", new Ref("parent", "/missing", MissingPolicy.OMIT, RefBsonType.INT32, RuleOptions.REQUIRED));
+
+        BsonDocument generated = decode(engine.generate("child", 0, 1, template, fields,
+                ResolvedIdStrategy.explicit(), Map.of("parent", parent), Map.of()));
+
+        assertThat(generated.getInt32("asInt").getValue()).isEqualTo(123);
+        assertThat(generated.getInt64("asLong").getValue()).isEqualTo(123L);
+        assertThat(generated.getDouble("asDouble").getValue()).isEqualTo(123.0);
+        assertThat(generated.getString("asString").getValue()).isEqualTo("123");
+        assertThat(generated.get("nil")).isEqualTo(BsonNull.VALUE);
+        assertThat(generated.get("missing")).isEqualTo(BsonNull.VALUE);
+        assertThat(generated.containsKey("omitted")).isFalse();
+        assertThat(decode(parent).getString("code").getValue()).isEqualTo("123");
+    }
+
+    @Test void typedRefsRejectInvalidAndLossyValuesWithoutEchoingSourceData() {
+        var engine = new MongoGenerationBsonEngine();
+        for (var invalid : List.of(
+                Map.entry(new BsonString("confidential"), RefBsonType.INT32),
+                Map.entry(new BsonInt64(2_147_483_648L), RefBsonType.INT32),
+                Map.entry(new BsonDouble(1.5), RefBsonType.INT64),
+                Map.entry(new BsonInt64(9_007_199_254_740_993L), RefBsonType.DOUBLE),
+                Map.entry(new BsonString("0.1"), RefBsonType.DOUBLE),
+                Map.entry(new BsonDouble(Double.NaN), RefBsonType.DOUBLE))) {
+            BsonPayload template = encode(new BsonDocument("_id", new BsonInt32(1)).append("code", invalid.getKey()));
+            Map<String, GenerationRule> fields = Map.of("/converted",
+                    new Ref(null, "/code", MissingPolicy.ERROR, invalid.getValue(), RuleOptions.REQUIRED));
+
+            assertThatThrownBy(() -> engine.generate("items", 3, 1, template, fields,
+                    ResolvedIdStrategy.explicit(), Map.of(), Map.of()))
+                    .isInstanceOf(GenerationException.class)
+                    .hasMessage("Cannot convert ref to BSON " + invalid.getValue() + " in items/converted at iteration 3")
+                    .hasNoCause();
+        }
+    }
+
+    @Test void numericDateUsesTheConfiguredTimezoneAndRejectsNonnumericOutput() {
+        var engine = new MongoGenerationBsonEngine();
+        BsonPayload template = encode(BsonDocument.parse("{_id: 1}"));
+        var instant = new FixedDate(java.time.Instant.parse("2025-12-31T19:00:00Z"));
+        Map<String, GenerationRule> valid = Map.of("/code",
+                new DateTime(instant, DateOutput.DOUBLE, "'1'yyMMdd", "Asia/Tashkent", "ROOT", RuleOptions.REQUIRED));
+        Map<String, GenerationRule> invalid = Map.of("/code",
+                new DateTime(instant, DateOutput.DOUBLE, "uuuu-MM-dd", "UTC", "ROOT", RuleOptions.REQUIRED));
+
+        BsonDocument generated = decode(engine.generate("items", 0, 1, template, valid,
+                ResolvedIdStrategy.explicit(), Map.of(), Map.of()));
+
+        assertThat(generated.getDouble("code").getValue()).isEqualTo(1_260_101.0);
+        assertThatThrownBy(() -> engine.generate("items", 0, 1, template, invalid,
+                ResolvedIdStrategy.explicit(), Map.of(), Map.of()))
+                .isInstanceOf(GenerationException.class)
+                .hasMessageContaining("dateTime pattern must produce an exact BSON DOUBLE in items/code")
+                .hasNoCause();
     }
 
     @Test void randomSharedDateIsCoordinateDerivedOnlyFromSeedNameAndIteration() {

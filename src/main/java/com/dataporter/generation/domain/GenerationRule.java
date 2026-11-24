@@ -161,19 +161,24 @@ public sealed interface GenerationRule permits GenerationRule.Literal, Generatio
             if (name == null || name.isBlank()) throw new IllegalArgumentException("shared date name is required");
         }
     }
-    enum DateOutput { BSON_DATE, STRING }
+    enum DateOutput { BSON_DATE, STRING, DOUBLE }
     record DateTime(DateSource source, DateOutput output, String pattern, String zone, String locale,
                     RuleOptions options) implements GenerationRule {
         public DateTime {
             if (source == null || output == null) throw new IllegalArgumentException("dateTime source and output are required");
-            if (output == DateOutput.STRING && (pattern == null || pattern.isBlank()))
-                throw new IllegalArgumentException("dateTime STRING pattern is required");
+            if (output != DateOutput.BSON_DATE && (pattern == null || pattern.isBlank()))
+                throw new IllegalArgumentException("dateTime " + output + " pattern is required");
         }
     }
 
     enum MissingPolicy { ERROR, NULL, OMIT }
+    enum RefBsonType { STRING, INT32, INT64, DOUBLE }
     record Ref(String collection, String path, MissingPolicy onMissing,
-               RuleOptions options) implements GenerationRule {
+               RefBsonType bsonType, RuleOptions options) implements GenerationRule {
+        public Ref(String collection, String path, MissingPolicy onMissing, RuleOptions options) {
+            this(collection, path, onMissing, null, options);
+        }
+
         public Ref {
             if (path == null || !path.startsWith("/") || onMissing == null)
                 throw new IllegalArgumentException("ref path must be JSON Pointer and onMissing is required");

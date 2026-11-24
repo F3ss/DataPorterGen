@@ -512,7 +512,7 @@ class MongoGenerationIntegrationTest {
                     count: 3
                     fields:
                       /_id: { kind: objectId }
-                      /ordinal: { kind: sequence, start: 0, step: 1 }
+                      /ordinal: { kind: ref, collection: events, path: /ordinal, bsonType: INT32 }
                       /operationDate:
                         kind: dateTime
                         source: { kind: shared, name: operationDate }
@@ -521,6 +521,11 @@ class MongoGenerationIntegrationTest {
                         kind: dateTime
                         source: { kind: shared, name: operationDate }
                         output: STRING
+                        pattern: "'1'yyMMdd"
+                      /legacyDateDouble:
+                        kind: dateTime
+                        source: { kind: shared, name: operationDate }
+                        output: DOUBLE
                         pattern: "'1'yyMMdd"
                       /generated: { kind: literal, value: true }
                 """);
@@ -540,12 +545,15 @@ class MongoGenerationIntegrationTest {
             assertThat(events).hasSize(3);
             assertThat(legacyEvents).hasSize(3);
             for (int i = 0; i < events.size(); i++) {
+                assertThat(events.get(i).getLong("ordinal")).isEqualTo((long) i);
+                assertThat(legacyEvents.get(i).getInteger("ordinal")).isEqualTo(i);
                 Date eventDate = events.get(i).getDate("operationDate");
                 Date legacyDate = legacyEvents.get(i).getDate("operationDate");
                 Instant instant = eventDate.toInstant();
                 assertThat(legacyDate).isEqualTo(eventDate);
                 assertThat(events.get(i).getString("operationText")).isEqualTo(iso.format(instant));
                 assertThat(legacyEvents.get(i).getString("legacyDate")).isEqualTo(legacy.format(instant));
+                assertThat(legacyEvents.get(i).getDouble("legacyDateDouble")).isEqualTo(Double.parseDouble(legacy.format(instant)));
             }
         }
     }

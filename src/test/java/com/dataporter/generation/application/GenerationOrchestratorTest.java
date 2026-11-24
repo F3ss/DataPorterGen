@@ -3,6 +3,7 @@ package com.dataporter.generation.application;
 import com.dataporter.adapters.snapshot.FileTemplateCatalogFactory;
 import com.dataporter.adapters.config.GenerationConfigReader;
 import com.dataporter.adapters.mongo.MongoGenerationBsonEngine;
+import com.dataporter.adapters.reporting.JsonReportWriter;
 import com.dataporter.generation.domain.CollectionGenerationSpec;
 import com.dataporter.generation.domain.GenerationCommand;
 import com.dataporter.generation.domain.GenerationOptions;
@@ -24,10 +25,12 @@ import com.dataporter.shared.bson.BsonPayload;
 import com.dataporter.shared.bson.DataBatch;
 import com.dataporter.shared.domain.Endpoint;
 import com.dataporter.shared.domain.FailureKind;
+import com.dataporter.shared.domain.OperationIssue;
 import com.dataporter.shared.error.ConfigurationException;
 import com.dataporter.shared.domain.OperationStatus;
 import com.dataporter.shared.ports.out.BatchCursor;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.bson.*;
 import org.bson.codecs.BsonDocumentCodec;
 import org.junit.jupiter.api.Test;
@@ -43,24 +46,58 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class GenerationOrchestratorTest {
-    @Test void mismatchedFieldFormatStopsBeforeTargetConnection() {
+    @Test void reportsAllFieldFormatMismatchesBeforeTargetConnection(@TempDir Path directory) throws Exception {
         FakeTarget target = new FakeTarget();
-        var spec = generationSpec(1, Map.of("/_id", new GenerationRule.ObjectId(RuleOptions.REQUIRED),
-                "/amount", new Literal("wrong-format", RuleOptions.REQUIRED)));
+        Path config = directory.resolve("generation.yml");
+        Files.writeString(config, """
+                version: 1
+                collections:
+                  - name: items
+                    count: 1
+                    fields:
+                      /amount: { kind: literal, value: confidential-config }
+                      /records:
+                        kind: array
+                        length: 1
+                        items:
+                          kind: weightedChoice
+                          choices:
+                            - {value: true, weight: 1}
+                            - {value: 10, weight: 1}
+                  - name: orders
+                    count: 1
+                    fields:
+                      /label: { kind: literal, value: false }
+                """);
         BsonPayload template = encode(new RawBsonDocument(defaultTemplate().bytes()).decode(new BsonDocumentCodec())
-                .append("amount", new BsonInt64(4178)));
+                .append("amount", new BsonInt64(4178))
+                .append("records", new BsonArray(List.of(new BsonString("confidential-template"))))
+                .append("label", new BsonString("confidential-label")));
 
         Endpoint endpoint = command(false).source();
-        GenerationReport report = service(target, spec, false, false, template)
-                .generate(new GenerationCommand(endpoint, endpoint, new GenerationOptions(false, false)));
+        Path reportPath = directory.resolve("report.json");
+        GenerationReport report = new GenerationOrchestrator(new FakeSource(template, List.of("items", "orders")),
+                target, new GenerationConfigReader(config), (source, collections, max) -> catalogOf(template),
+                new MongoGenerationBsonEngine(), new JsonReportWriter(reportPath), () -> false)
+                .generate(new GenerationCommand(endpoint, endpoint, new GenerationOptions(true, false)));
 
         assertThat(report.status()).isEqualTo(OperationStatus.FAILED);
         assertThat(report.safeToRetry()).isTrue();
-        assertThat(report.errors()).singleElement().satisfies(issue -> {
+        assertThat(report.errors()).allSatisfy(issue -> {
             assertThat(issue.stage()).isEqualTo("VALIDATE_FIELD_FORMATS");
-            assertThat(issue.message()).contains("items/amount", "STRING", "INT64")
-                    .doesNotContain("wrong-format", "4178");
+            assertThat(issue.failureKind()).isEqualTo(FailureKind.CONFIGURATION);
         });
+        assertThat(report.errors()).extracting(OperationIssue::object)
+                .containsExactly("items/amount", "items/records/[]", "orders/label");
+        assertThat(report.errors()).extracting(OperationIssue::message)
+                .containsExactly("BSON field format mismatch in items/amount: configured [STRING], source templates [INT64]",
+                        "BSON field format mismatch in items/records/[]: configured [BOOLEAN, INT32], source templates [STRING]",
+                        "BSON field format mismatch in orders/label: configured [BOOLEAN], source templates [STRING]");
+        var json = new ObjectMapper().readTree(reportPath.toFile());
+        assertThat(json.path("errors")).hasSize(3);
+        assertThat(json.path("errors").get(2).path("object").asText()).isEqualTo("orders/label");
+        assertThat(Files.readString(reportPath)).doesNotContain("confidential-config", "confidential-template",
+                "confidential-label");
         assertThat(target.connections).isZero();
         assertThat(target.written).isZero();
     }
@@ -120,12 +157,14 @@ class GenerationOrchestratorTest {
         String original = """
                 {"version":1,"seed":123,"collections":[{"name":"items","count":2,"fields":{
                   "/fixable":{"kind":"randomNumber","bsonType":"INT32","min":5,"max":5},
-                  "/mixed":{"kind":"literal","value":10}
+                  "/mixed":{"kind":"literal","value":10},
+                  "/manual":{"kind":"literal","value":false}
                 }}]}
                 """;
         Files.writeString(config, original);
         BsonPayload first = encode(new BsonDocument("_id", new BsonObjectId(new org.bson.types.ObjectId()))
-                .append("fixable", new BsonInt64(5)).append("mixed", new BsonInt32(10)));
+                .append("fixable", new BsonInt64(5)).append("mixed", new BsonInt32(10))
+                .append("manual", new BsonString("template")));
         BsonPayload second = encode(new BsonDocument("_id", new BsonObjectId(new org.bson.types.ObjectId()))
                 .append("fixable", new BsonInt64(5)).append("mixed", new BsonString("10")));
         FakeTarget target = new FakeTarget();
@@ -135,8 +174,8 @@ class GenerationOrchestratorTest {
                 catalogs, new MongoGenerationBsonEngine(), ignored -> {}, () -> false).generate(formatOptions(true, true));
 
         assertThat(failed.status()).isEqualTo(OperationStatus.FAILED);
-        assertThat(failed.errors()).singleElement().satisfies(issue ->
-                assertThat(issue.message()).contains("items/mixed", "source templates [INT32, STRING]"));
+        assertThat(failed.errors()).extracting(OperationIssue::object).containsExactly("items/mixed", "items/manual");
+        assertThat(failed.errors().getFirst().message()).contains("source templates [INT32, STRING]");
         assertThat(Files.readString(config)).isEqualTo(original);
         assertThat(target.connections).isZero();
 
@@ -158,8 +197,51 @@ class GenerationOrchestratorTest {
                 .append("parentId", new BsonInt32(2)));
         var formats = new GenerationFieldFormats(spec, catalogOf(template), new MongoGenerationBsonEngine(), () -> false);
 
-        assertThatThrownBy(() -> formats.validate(spec)).isInstanceOf(ConfigurationException.class)
-                .hasMessageContaining("children/parentId: configured [INT64], source templates [INT32]");
+        assertThatThrownBy(() -> formats.validate(spec))
+                .isInstanceOfSatisfying(GenerationFieldFormats.ValidationException.class, error ->
+                        assertThat(error.mismatches()).singleElement().satisfies(mismatch ->
+                                assertThat(mismatch.message()).contains("children/parentId: configured [INT64], source templates [INT32]")));
+    }
+
+    @Test void validatesAndWritesDeclaredRefAndSharedDateOutputTypes(@TempDir Path directory) throws Exception {
+        Path config = directory.resolve("generation.yml");
+        Files.writeString(config, """
+                version: 1
+                sharedDates:
+                  operationDate: { kind: fixed, value: "2026-01-01T00:00:00Z" }
+                collections:
+                  - name: items
+                    count: 1
+                    fields:
+                      /converted: { kind: ref, path: /code, bsonType: INT32 }
+                      /copied: { kind: ref, path: /converted }
+                      /legacy:
+                        kind: dateTime
+                        source: { kind: shared, name: operationDate }
+                        output: DOUBLE
+                        pattern: "'1'yyMMdd"
+                        zone: UTC
+                """);
+        BsonPayload template = encode(new BsonDocument("_id", new BsonObjectId(new org.bson.types.ObjectId()))
+                .append("code", new BsonString("123"))
+                .append("converted", new BsonInt32(0))
+                .append("copied", new BsonInt32(0))
+                .append("legacy", new BsonDouble(0)));
+        FakeTarget target = new FakeTarget();
+        var service = new GenerationOrchestrator(new FakeSource(template), target, new GenerationConfigReader(config),
+                (source, collections, max) -> catalogOf(template), new MongoGenerationBsonEngine(),
+                ignored -> {}, () -> false);
+
+        GenerationReport report = service.generate(formatOptions(true, false));
+
+        assertThat(report.status()).as(report.errors().toString()).isEqualTo(OperationStatus.SUCCESS);
+        assertThat(target.payloads).singleElement().satisfies(payload -> {
+            BsonDocument document = new RawBsonDocument(payload.bytes());
+            assertThat(document.get("code")).isEqualTo(new BsonString("123"));
+            assertThat(document.get("converted")).isEqualTo(new BsonInt32(123));
+            assertThat(document.get("copied")).isEqualTo(new BsonInt32(123));
+            assertThat(document.get("legacy")).isEqualTo(new BsonDouble(1_260_101.0));
+        });
     }
 
     private GenerationCommand formatOptions(boolean validate, boolean update) {
@@ -872,6 +954,44 @@ class GenerationOrchestratorTest {
         assertThat(events).contains("write");
     }
 
+    @Test void convertedRefsDoNotInheritUniqueKeyProofs() {
+        var converted = new Ref(null, "/value", MissingPolicy.ERROR, RefBsonType.INT32, RuleOptions.REQUIRED);
+        var randomString = new RandomString(Alphabet.CUSTOM, "0123456789", 1, 3, RuleOptions.REQUIRED);
+        FakeTarget idTarget = new FakeTarget();
+        GenerationReport rejectedId = service(idTarget, generationSpec(2, Map.of(
+                "/value", randomString, "/_id", converted)), false).generate(command(false));
+
+        assertThat(rejectedId.status()).isEqualTo(OperationStatus.FAILED);
+        assertThat(rejectedId.errors().getFirst().message()).contains("Cannot prove generated uniqueness", "_id_");
+        assertThat(idTarget.writeChecks).isZero();
+
+        FakeTarget secondaryTarget = new FakeTarget();
+        secondaryTarget.constraints = List.of(
+                new UniqueConstraint("items", "converted_unique", List.of("/converted"), false, false, false));
+        var sequence = new Sequence(SequenceStart.EXPLICIT, 1, 1, RuleOptions.REQUIRED);
+        GenerationReport rejectedSecondary = service(secondaryTarget, generationSpec(2, Map.of(
+                "/_id", new GenerationRule.ObjectId(RuleOptions.REQUIRED),
+                "/value", sequence, "/converted", converted)), false).generate(command(false, true));
+
+        assertThat(rejectedSecondary.status()).isEqualTo(OperationStatus.FAILED);
+        assertThat(rejectedSecondary.errors().getFirst().message()).contains("Cannot prove generated uniqueness", "converted_unique");
+        assertThat(secondaryTarget.writeChecks).isZero();
+    }
+
+    @Test void malformedConvertedRefFailsInCoverageBeforeWriteProbe() {
+        var converted = new Ref(null, "/value", MissingPolicy.ERROR, RefBsonType.INT32, new RuleOptions(1, 0));
+        var spec = generationSpec(1, Map.of("/_id", new GenerationRule.ObjectId(RuleOptions.REQUIRED),
+                "/value", new Literal("confidential", RuleOptions.REQUIRED), "/converted", converted));
+        FakeTarget target = new FakeTarget();
+
+        GenerationReport report = service(target, spec, false).generate(command(false));
+
+        assertThat(report.status()).isEqualTo(OperationStatus.FAILED);
+        assertThat(report.errors()).singleElement().satisfies(issue -> assertThat(issue.message())
+                .contains("Cannot convert ref to BSON INT32 in items/converted").doesNotContain("confidential"));
+        assertThat(target.writeChecks).isZero();
+    }
+
     @Test void constantScalarIdRequiresExplicitOptIn() {
         for (GenerationRule literal : List.of(
                 new Literal("fixed", RuleOptions.REQUIRED),
@@ -1124,11 +1244,16 @@ class GenerationOrchestratorTest {
 
     private static final class FakeSource implements GenerationSource {
         final BsonPayload template;
-        FakeSource(BsonPayload template){this.template=template;}
+        final List<String> collections;
+        FakeSource(BsonPayload template) { this(template, List.of("items")); }
+        FakeSource(BsonPayload template, List<String> collections) {
+            this.template = template;
+            this.collections = collections;
+        }
         public void checkConnection(){}
         public void checkReadable(){}
         public boolean databaseExists(){return true;}
-        public GenerationSourceInspection inspect(){return new GenerationSourceInspection(List.of("items"),List.of());}
+        public GenerationSourceInspection inspect(){return new GenerationSourceInspection(collections,List.of());}
         public BatchCursor openBatches(String collection,int size){return new BatchCursor(){boolean used;
             public DataBatch next(){if(used)return null;used=true;return new DataBatch(collection,List.of(template),template.size());}
             public void close(){}};}

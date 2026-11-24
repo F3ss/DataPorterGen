@@ -55,7 +55,7 @@ public final class GenerationSpecValidator {
             try {
                 ZoneId zone = ZoneId.of(date.zone());
                 Locale locale = locale(date.locale());
-                if (date.output() == DateOutput.STRING) DateTimeFormatter.ofPattern(date.pattern(), locale).withZone(zone);
+                if (date.output() != DateOutput.BSON_DATE) DateTimeFormatter.ofPattern(date.pattern(), locale).withZone(zone);
             } catch (RuntimeException e) { fail("Invalid dateTime pattern, zone, or locale in " + current.name() + ": " + e.getMessage()); }
             if (date.source() instanceof DateRef ref) validateRef(ref.collection(), ref.path(), current, previous, local);
             else if (date.source() instanceof SharedDateRef ref && !sharedDates.contains(ref.name()))
