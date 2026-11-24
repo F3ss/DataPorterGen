@@ -50,6 +50,15 @@ for (let i = 0; i < orders.length; i++) {
 }
 if (catalog.orders.countDocuments({ generated: true, customerOrdinal: { $type: "int" } }) !== orders.length)
   fail("converted customerOrdinal is not BSON int32");
+if (catalog.orders.countDocuments({ generated: true, randomWhole: { $type: "double" }, randomAmount: { $type: "double" } }) !== orders.length)
+  fail("generated random numbers are not BSON doubles");
+const randomWholes = orders.map(item => Number(item.randomWhole));
+if (!randomWholes.every(value => Number.isInteger(value) && value >= 100 && value <= 777))
+  fail("randomWhole is outside [100,777] or has a fractional part");
+const randomAmounts = orders.map(item => Number(item.randomAmount));
+if (!randomAmounts.every(value => value >= 100 && value <= 999 && value === Math.round(value * 100) / 100)
+    || !randomAmounts.some(value => !Number.isInteger(value)))
+  fail("randomAmount does not use the configured hundredths in [100,999]");
 if (!orders.every(item => canonical(item.operationDate) === canonical(ISODate("2026-09-02T10:20:30.123Z"))))
   fail("order shared BSON date differs");
 if (catalog.orders.countDocuments({ generated: true, legacyDate: { $type: "double", $eq: 1260902 } }) !== orders.length)

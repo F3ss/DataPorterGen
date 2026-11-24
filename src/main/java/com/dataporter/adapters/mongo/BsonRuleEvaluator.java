@@ -285,12 +285,22 @@ final class BsonRuleEvaluator {
         return switch (number.bsonType()) {
             case INT32 -> new BsonInt32((int) boundedLong(hash(seed, collection, iteration, path), number.min().longValueExact(), number.max().longValueExact()));
             case INT64 -> new BsonInt64(boundedLong(hash(seed, collection, iteration, path), number.min().longValueExact(), number.max().longValueExact()));
-            case DOUBLE -> new BsonDouble(number.min().doubleValue() + unit(seed, collection, iteration, path) * number.max().subtract(number.min()).doubleValue());
+            case DOUBLE -> new BsonDouble(randomDouble(number, hash(seed, collection, iteration, path)));
             case DECIMAL128 -> {
                 BigDecimal fraction = BigDecimal.valueOf(unit(seed, collection, iteration, path));
                 yield new BsonDecimal128(new Decimal128(number.min().add(number.max().subtract(number.min()).multiply(fraction))));
             }
         };
+    }
+
+    private static double randomDouble(RandomNumber number, byte[] hash) {
+        int scale = Math.max(0, number.min().scale());
+        BigInteger min = number.min().setScale(scale).unscaledValue();
+        BigInteger max = number.max().setScale(scale).unscaledValue();
+        BigInteger count = max.subtract(min).add(BigInteger.ONE);
+        // Scale the hash over the full range, even when the range is wider than the hash itself.
+        BigInteger offset = new BigInteger(1, hash).multiply(count).shiftRight(Byte.SIZE * hash.length);
+        return new BigDecimal(min.add(offset), scale).doubleValue();
     }
 
     List<String> cachedEvaluationOrder(Map<String, GenerationRule> fields) {

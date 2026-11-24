@@ -52,6 +52,9 @@ collections:
         bsonType: INT32
         min: 18
         max: 90
+      /score: { kind: randomNumber, bsonType: DOUBLE, min: 100, max: 777 }
+      /rating: { kind: randomNumber, bsonType: DOUBLE, min: 100.0, max: 999.0 }
+      /creditAmount: { kind: randomNumber, bsonType: DOUBLE, min: 100.00, max: 999.00 }
       /tier:
         kind: weightedChoice
         choices:

@@ -344,11 +344,15 @@ fields:
 ```yaml
 /smallCounter: { kind: randomNumber, bsonType: INT32, min: -100, max: 100 }
 /largeCounter: { kind: randomNumber, bsonType: INT64, min: 0, max: 9000000000 }
-/ratio:        { kind: randomNumber, bsonType: DOUBLE, min: 0.0, max: 1.0 }
+/wholeDouble:  { kind: randomNumber, bsonType: DOUBLE, min: 100, max: 777 }
+/tenths:       { kind: randomNumber, bsonType: DOUBLE, min: 100.0, max: 999.0 }
+/hundredths:   { kind: randomNumber, bsonType: DOUBLE, min: 100.00, max: 999.00 }
 /amount:       { kind: randomNumber, bsonType: DECIMAL128, min: 0.01, max: 9999.99 }
 ```
 
-Для `INT32` и `INT64` границы должны быть целыми и входят в диапазон выбора. `DOUBLE` и `DECIMAL128` допускают дробные границы. Значения должны помещаться в выбранный BSON-тип.
+Для `INT32` и `INT64` границы должны быть целыми и входят в диапазон выбора. `DECIMAL128` допускает дробные границы. Значения должны помещаться в выбранный BSON-тип.
+
+Для `DOUBLE` у `min` и `max` должно быть одинаковое число знаков после десятичной точки, включая конечные нули. Генератор выбирает из значений с шагом `1`, `0.1`, `0.01` и так далее, включая обе границы. Например, `100.00`–`999.00` может дать `572.09` или `572.10`. В BSON Double хранится двоичное значение, поэтому конечные нули при отображении зависят от клиента, а близкие десятичные значения могут округляться в одно двоичное.
 
 ## `weightedChoice`: выбор по весам
 

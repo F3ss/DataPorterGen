@@ -189,8 +189,14 @@ public final class GenerationConfigReader implements GenerationSpecReader {
             }
             case "randomNumber" -> {
                 unknown(node, at, "kind", "bsonType", "min", "max", "nullProbability", "omitProbability");
-                yield new RandomNumber(enumValue(NumberType.class, requiredText(node, "bsonType", at), at + ".bsonType"),
-                        requiredDecimal(node, "min", at), requiredDecimal(node, "max", at), options);
+                NumberType type = enumValue(NumberType.class, requiredText(node, "bsonType", at), at + ".bsonType");
+                BigDecimal min = requiredDecimal(node, "min", at);
+                BigDecimal max = requiredDecimal(node, "max", at);
+                try {
+                    yield new RandomNumber(type, min, max, options);
+                } catch (IllegalArgumentException e) {
+                    throw new ConfigurationException(at + ": " + e.getMessage());
+                }
             }
             case "weightedChoice" -> {
                 unknown(node, at, "kind", "choices", "nullProbability", "omitProbability");

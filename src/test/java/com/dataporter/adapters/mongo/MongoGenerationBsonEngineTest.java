@@ -14,7 +14,9 @@ import org.bson.codecs.BsonDocumentCodec;
 import org.bson.types.Decimal128;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import java.math.BigDecimal;
 import java.math.BigInteger;
+import java.math.RoundingMode;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
@@ -62,6 +64,61 @@ class MongoGenerationBsonEngineTest {
         assertThat(numbers.get(2).asDocument().get("minimum")).isEqualTo(new BsonInt32(Integer.MIN_VALUE));
         assertThat(numbers.get(2).asDocument().get("below"))
                 .isEqualTo(new BsonInt64((long) Integer.MIN_VALUE - 1));
+    }
+
+    @Test void randomDoubleUsesTheDecimalPlacesWrittenInYaml(@TempDir Path temp) throws Exception {
+        Path config = temp.resolve("random-double.yml");
+        Files.writeString(config, """
+                version: 1
+                collections:
+                  - name: items
+                    count: 1
+                    fields:
+                      /whole: { kind: randomNumber, bsonType: DOUBLE, min: 100, max: 102 }
+                      /tenths: { kind: randomNumber, bsonType: DOUBLE, min: 100.0, max: 101.0 }
+                      /hundredths: { kind: randomNumber, bsonType: DOUBLE, min: 100.00, max: 101.00 }
+                      /signed: { kind: randomNumber, bsonType: DOUBLE, min: -0.02, max: 0.02 }
+                      /fixed: { kind: randomNumber, bsonType: DOUBLE, min: 1.2300, max: 1.2300 }
+                """);
+        var collection = new GenerationConfigReader(config).read().collections().getFirst();
+        var engine = new MongoGenerationBsonEngine();
+        BsonPayload template = encode(BsonDocument.parse("{_id: 1}"));
+        Set<Double> whole = new HashSet<>(), tenths = new HashSet<>(), hundredths = new HashSet<>(), signed = new HashSet<>();
+
+        for (long iteration = 0; iteration < 256; iteration++) {
+            BsonDocument generated = decode(engine.generate(collection.name(), iteration, 99, template, collection.fields(),
+                    ResolvedIdStrategy.explicit(), Map.of(), Map.of()));
+            whole.add(generated.getDouble("whole").getValue());
+            tenths.add(generated.getDouble("tenths").getValue());
+            hundredths.add(generated.getDouble("hundredths").getValue());
+            signed.add(generated.getDouble("signed").getValue());
+            assertThat(generated.getDouble("fixed").getValue()).isEqualTo(1.23);
+        }
+
+        assertThat(whole).containsExactlyInAnyOrder(100.0, 101.0, 102.0);
+        assertThat(tenths).containsExactlyInAnyOrder(100.0, 100.1, 100.2, 100.3, 100.4, 100.5,
+                100.6, 100.7, 100.8, 100.9, 101.0);
+        assertThat(hundredths).hasSizeGreaterThan(tenths.size()).allSatisfy(value -> {
+            assertThat(value).isBetween(100.0, 101.0);
+            assertThat(BigDecimal.valueOf(value).setScale(2, RoundingMode.UNNECESSARY).doubleValue()).isEqualTo(value);
+        });
+        assertThat(signed).containsExactlyInAnyOrder(-0.02, -0.01, 0.0, 0.01, 0.02);
+    }
+
+    @Test void randomDoubleStaysFiniteWhenTheRangeExceedsDoubleMaxValue() {
+        var engine = new MongoGenerationBsonEngine();
+        BsonPayload template = encode(BsonDocument.parse("{_id: 1}"));
+        Map<String, GenerationRule> fields = Map.of("/wide", new RandomNumber(NumberType.DOUBLE,
+                new BigDecimal("-1E+308"), new BigDecimal("1E+308"), RuleOptions.REQUIRED));
+        Set<Double> values = new HashSet<>();
+        for (long iteration = 0; iteration < 32; iteration++) {
+            BsonDocument generated = decode(engine.generate("items", iteration, 99, template, fields,
+                    ResolvedIdStrategy.explicit(), Map.of(), Map.of()));
+            values.add(generated.getDouble("wide").getValue());
+        }
+
+        assertThat(values).allSatisfy(value -> assertThat(value).isBetween(-1E+308, 1E+308));
+        assertThat(values).anyMatch(value -> value < -1E+307).anyMatch(value -> value > 1E+307);
     }
 
     @Test void sharedDateUsesOneMillisecondInstantAcrossCollectionsAndFormats() {

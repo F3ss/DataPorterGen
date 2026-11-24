@@ -71,8 +71,12 @@ public sealed interface GenerationRule permits GenerationRule.Literal, Generatio
                 try { min.longValueExact(); max.longValueExact(); }
                 catch (ArithmeticException e) { throw new IllegalArgumentException("INT64 randomNumber bounds exceed BSON int64"); }
             }
-            if (bsonType == NumberType.DOUBLE && (!Double.isFinite(min.doubleValue()) || !Double.isFinite(max.doubleValue())))
-                throw new IllegalArgumentException("DOUBLE randomNumber bounds must be finite");
+            if (bsonType == NumberType.DOUBLE) {
+                if (!Double.isFinite(min.doubleValue()) || !Double.isFinite(max.doubleValue()))
+                    throw new IllegalArgumentException("DOUBLE randomNumber bounds must be finite");
+                if (Math.max(0, min.scale()) != Math.max(0, max.scale()))
+                    throw new IllegalArgumentException("DOUBLE randomNumber bounds must have the same number of decimal places");
+            }
         }
     }
 

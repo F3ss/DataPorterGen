@@ -28,7 +28,7 @@ import static org.assertj.core.api.Assertions.fail;
  * set the constant to PIN-ME, run the test, and copy the printed digest.
  */
 class MongoGenerationBsonEngineGoldenTest {
-    private static final String GOLDEN_SHA256 = "ec7a5e50d3f76c5eebcc1a05ddbe87934df668be4df32105913fd0dead8d54b1";
+    private static final String GOLDEN_SHA256 = "1026272fee4eb5696026cbc1683b3223671bae027f55fed9c26dcdec77f93d45";
     private static final long SEED = 20260901L;
     private static final int ITERATIONS = 10_000;
     private static final int BATCH_SIZE = 64;

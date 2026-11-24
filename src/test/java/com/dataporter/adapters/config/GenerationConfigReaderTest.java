@@ -20,6 +20,44 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.*;
 
 class GenerationConfigReaderTest {
+    @Test void preservesDoubleBoundPrecisionOnReadAndFormatUpdates(@TempDir Path temp) throws Exception {
+        for (String extension : List.of("json", "yml")) {
+            Path file = temp.resolve("generation." + extension);
+            Files.writeString(file, """
+                    {"version":1,"collections":[{"name":"items","count":1,"fields":{
+                      "/counter":{"kind":"randomNumber","bsonType":"INT32","min":1,"max":8},
+                      "/ratio":{"kind":"randomNumber","bsonType":"DOUBLE","min":100.00,"max":999.00}
+                    }}]}
+                    """);
+            GenerationConfigReader reader = new GenerationConfigReader(file);
+            var original = reader.read();
+            var changes = List.of(new GenerationFormatChange("/collections/0/fields/~1counter", Map.of("bsonType", "INT64")));
+            reader.updateFieldFormats(original.configHash(), changes, new GenerationSpecValidator()::validate);
+
+            for (var spec : List.of(original, reader.read())) {
+                var ratio = (RandomNumber) spec.collections().getFirst().fields().get("/ratio");
+                assertThat(ratio.min().scale()).as("min scale in %s", extension).isEqualTo(2);
+                assertThat(ratio.max().scale()).as("max scale in %s", extension).isEqualTo(2);
+            }
+        }
+    }
+
+    @Test void rejectsDoubleBoundsWithDifferentPrecisionAtTheRulePath(@TempDir Path temp) throws Exception {
+        Path file = temp.resolve("mixed-precision.yml");
+        Files.writeString(file, """
+                version: 1
+                collections:
+                  - name: items
+                    count: 1
+                    fields:
+                      /amount: { kind: randomNumber, bsonType: DOUBLE, min: 100, max: 999.00 }
+                """);
+
+        assertThatThrownBy(() -> new GenerationConfigReader(file).read())
+                .isInstanceOf(ConfigurationException.class)
+                .hasMessageContaining("fields./amount: DOUBLE randomNumber bounds must have the same number of decimal places");
+    }
+
     @Test void updatesJsonAndRejectsAStaleConfigHash(@TempDir Path temp) throws Exception {
         Path file = temp.resolve("generation.json");
         Files.writeString(file, """

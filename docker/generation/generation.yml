@@ -41,6 +41,8 @@ collections:
           - { kind: ref, path: /sequence }
       /customerId: { kind: ref, collection: customers, path: /_id }
       /customerOrdinal: { kind: ref, collection: customers, path: /ordinal, bsonType: INT32 }
+      /randomWhole: { kind: randomNumber, bsonType: DOUBLE, min: 100, max: 777 }
+      /randomAmount: { kind: randomNumber, bsonType: DOUBLE, min: 100.00, max: 999.00 }
       /operationDate:
         kind: dateTime
         source: { kind: shared, name: operationDate }
