@@ -59,12 +59,14 @@ public class DataPorterGenApplication {
                 Config validation mode:
                   --migration.mode=VALIDATE_CONFIG
                   --migration.generation.config-path=./generation.yml (updates YAML in place)
+                  --migration.generation.validation-max-documents=10000 (per collection)
                 Environment equivalents include SOURCE_MONGODB_URI, SOURCE_DATABASE,
                 TARGET_MONGODB_URI, TARGET_DATABASE, TARGET_STRATEGY,
                 VERIFICATION_LEVEL,
                 INCLUDE_COLLECTIONS, EXCLUDE_COLLECTIONS, MIGRATION_MODE,
                 GENERATION_CONFIG_PATH, GENERATION_VALIDATE_ONLY, GENERATION_ALLOW_UNPROVEN_IDS,
-                GENERATION_VALIDATE_FIELD_FORMATS and GENERATION_UPDATE_FIELD_FORMATS.
+                GENERATION_VALIDATE_FIELD_FORMATS, GENERATION_UPDATE_FIELD_FORMATS,
+                and GENERATION_VALIDATION_MAX_DOCUMENTS.
                 """;
     }
 

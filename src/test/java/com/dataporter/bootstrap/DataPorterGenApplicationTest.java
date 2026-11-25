@@ -13,6 +13,7 @@ class DataPorterGenApplicationTest {
         assertThat(DataPorterGenApplication.help())
                 .startsWith("DataPorterGen (Java 21)")
                 .contains("--migration.generation.allow-unproven-ids=false", "GENERATION_ALLOW_UNPROVEN_IDS")
+                .contains("--migration.generation.validation-max-documents=10000", "GENERATION_VALIDATION_MAX_DOCUMENTS")
                 .doesNotContain("MongoDB database migrator");
     }
 
@@ -20,7 +21,8 @@ class DataPorterGenApplicationTest {
         try (var input = getClass().getResourceAsStream("/application.yml")) {
             assertThat(input).isNotNull();
             assertThat(new String(input.readAllBytes(), StandardCharsets.UTF_8))
-                    .contains("allow-unproven-ids: ${GENERATION_ALLOW_UNPROVEN_IDS:false}");
+                    .contains("allow-unproven-ids: ${GENERATION_ALLOW_UNPROVEN_IDS:false}",
+                            "validation-max-documents: ${GENERATION_VALIDATION_MAX_DOCUMENTS:10000}");
         }
     }
 }

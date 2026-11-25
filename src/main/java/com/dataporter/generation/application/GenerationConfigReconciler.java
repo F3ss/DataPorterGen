@@ -6,6 +6,8 @@ import com.dataporter.generation.domain.GenerationSpec;
 import com.dataporter.generation.ports.out.GenerationConfigEditor;
 import com.dataporter.generation.ports.out.GenerationConfigEditor.CollectionChanges;
 import com.dataporter.generation.ports.out.GenerationSchemaSource;
+import com.dataporter.generation.ports.out.GenerationSchemaSource.ScanCoverage;
+import com.dataporter.shared.error.ConfigurationException;
 import com.dataporter.shared.error.OperationCancelledException;
 import com.dataporter.shared.ports.out.CancellationToken;
 
@@ -24,7 +26,9 @@ public final class GenerationConfigReconciler {
         this.cancellation = cancellation;
     }
 
-    public Result reconcile() {
+    public Result reconcile(int maxDocuments) {
+        if (maxDocuments < 1 || maxDocuments == Integer.MAX_VALUE)
+            throw new ConfigurationException("validation-max-documents must be between 1 and " + (Integer.MAX_VALUE - 1));
         GenerationSpecValidator validator = new GenerationSpecValidator();
         GenerationSpec spec = config.readYaml();
         validator.validate(spec);
@@ -32,15 +36,17 @@ public final class GenerationConfigReconciler {
         Map<String, NavigableSet<String>> absent = new LinkedHashMap<>();
         List<Map<String, Set<String>>> sourceFields = new ArrayList<>();
         List<String> emptyCollections = new ArrayList<>();
+        List<String> truncatedCollections = new ArrayList<>();
         try (GenerationSchemaSource source = sourceFactory.get()) {
             source.checkConnection();
             for (CollectionGenerationSpec collection : spec.collections()) {
                 checkCancelled();
                 Set<String> paths = collection.fields().keySet();
-                var schema = source.inspectFields(collection.name(), paths, spec.batchSize(), cancellation);
+                var schema = source.inspectFields(collection.name(), paths, spec.batchSize(), maxDocuments, cancellation);
                 absent.put(collection.name(), obsoleteFields(paths, schema));
                 sourceFields.add(schema.fields());
-                if (!schema.absenceKnown()) emptyCollections.add(collection.name());
+                if (schema.coverage() == ScanCoverage.EMPTY) emptyCollections.add(collection.name());
+                if (schema.coverage() == ScanCoverage.TRUNCATED) truncatedCollections.add(collection.name());
             }
         }
 
@@ -63,12 +69,13 @@ public final class GenerationConfigReconciler {
             validator.validate(corrected);
             checkCancelled();
         });
-        return new Result(updated, obsoleteCount, missingCount, retained, List.copyOf(emptyCollections));
+        return new Result(updated, obsoleteCount, missingCount, retained, List.copyOf(emptyCollections),
+                List.copyOf(truncatedCollections));
     }
 
     private static NavigableSet<String> obsoleteFields(Set<String> paths, GenerationSchemaSource.FieldSchema schema) {
         NavigableSet<String> obsolete = new TreeSet<>();
-        if (schema.absenceKnown()) {
+        if (schema.coverage() == ScanCoverage.COMPLETE) {
             obsolete.addAll(paths);
             obsolete.removeAll(schema.presentPaths());
         }
@@ -141,5 +148,5 @@ public final class GenerationConfigReconciler {
     }
 
     public record Result(boolean updated, int obsolete, int missing, Map<String, Set<String>> retained,
-                         List<String> emptyCollections) {}
+                         List<String> emptyCollections, List<String> truncatedCollections) {}
 }

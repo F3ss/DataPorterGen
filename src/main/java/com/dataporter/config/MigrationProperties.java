@@ -125,6 +125,7 @@ public class MigrationProperties {
         private boolean allowUnprovenIds;
         private boolean validateFieldFormats = true;
         private boolean updateFieldFormats;
+        private int validationMaxDocuments = 10_000;
         public String getConfigPath() { return configPath; }
         public void setConfigPath(String configPath) { this.configPath = configPath; }
         public boolean isValidateOnly() { return validateOnly; }
@@ -135,6 +136,10 @@ public class MigrationProperties {
         public void setValidateFieldFormats(boolean validateFieldFormats) { this.validateFieldFormats = validateFieldFormats; }
         public boolean isUpdateFieldFormats() { return updateFieldFormats; }
         public void setUpdateFieldFormats(boolean updateFieldFormats) { this.updateFieldFormats = updateFieldFormats; }
+        public int getValidationMaxDocuments() { return validationMaxDocuments; }
+        public void setValidationMaxDocuments(int validationMaxDocuments) {
+            this.validationMaxDocuments = validationMaxDocuments;
+        }
     }
 
 }

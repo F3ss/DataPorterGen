@@ -81,6 +81,18 @@ class MigrationPropertiesTest {
         assertThat(options.updateFieldFormats()).isFalse();
     }
 
+    @Test void bindsConfigValidationLimitAndDefaultsToTenThousandDocuments() {
+        assertThat(new MigrationProperties().getGeneration().getValidationMaxDocuments()).isEqualTo(10_000);
+        var source = new MapConfigurationPropertySource(Map.of(
+                "migration.mode", "VALIDATE_CONFIG",
+                "migration.generation.validation-max-documents", "25000"));
+
+        MigrationProperties properties = new Binder(source).bind("migration", Bindable.of(MigrationProperties.class)).get();
+
+        assertThat(properties.getMode()).isEqualTo(OperationMode.VALIDATE_CONFIG);
+        assertThat(properties.getGeneration().getValidationMaxDocuments()).isEqualTo(25_000);
+    }
+
     private MigrationProperties configuredProperties() {
         var properties = new MigrationProperties();
         properties.getSource().setUri("mongodb://source:27017");

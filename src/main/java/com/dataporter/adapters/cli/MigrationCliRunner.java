@@ -59,10 +59,15 @@ public final class MigrationCliRunner implements ApplicationRunner {
             var endpoint = properties.sourceEndpoint();
             new GenerationConfigurationValidator().validateSource(endpoint);
             var config = new GenerationConfigReader(properties.generationConfigPath());
+            int maxDocuments = properties.getGeneration().getValidationMaxDocuments();
+            log.info("Starting generation config validation maxDocumentsPerCollection={}", maxDocuments);
             var result = new GenerationConfigReconciler(() -> new MongoGenerationSource(endpoint), config, cancelled::get)
-                    .reconcile();
+                    .reconcile(maxDocuments);
             result.emptyCollections().forEach(name ->
                     log.warn("Source collection {} is empty. Existing rules were kept.", SecretMasker.redact(name)));
+            result.truncatedCollections().forEach(name -> log.warn(
+                    "Source collection {} exceeds the validation limit of {} documents. Existing rules were kept.",
+                    SecretMasker.redact(name), maxDocuments));
             result.retained().forEach((name, fields) -> log.warn("Rules referenced by active rules were kept in {}: {}",
                     SecretMasker.redact(name), SecretMasker.redact(fields.toString())));
             log.info("Generation config checked updated={} obsoleteRulesCommented={} missingFieldsAnnotated={}",

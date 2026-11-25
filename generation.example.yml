@@ -1,5 +1,6 @@
 # BSON formats are checked by default. Use GENERATION_UPDATE_FIELD_FORMATS=true to update compatible rules in this file.
 # Use MIGRATION_MODE=VALIDATE_CONFIG to reconcile field paths against the source MongoDB and annotate this YAML.
+# GENERATION_VALIDATION_MAX_DOCUMENTS overrides the default sample of 10000 documents per collection.
 version: 1
 seed: 12345
 templateSelection: SHUFFLED_CYCLE

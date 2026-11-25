@@ -14,6 +14,8 @@ import java.nio.file.Path;
 import java.util.Map;
 import java.util.Set;
 
+import static com.dataporter.generation.ports.out.GenerationSchemaSource.ScanCoverage.COMPLETE;
+import static com.dataporter.generation.ports.out.GenerationSchemaSource.ScanCoverage.EMPTY;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -42,7 +44,7 @@ class GenerationConfigReconcilerTest {
         var result = reconcile(file, Map.of("people", new GenerationSchemaSource.FieldSchema(Map.of(
                 "/_id", Set.of("OBJECT_ID"), "/email", Set.of("STRING"), "/address", Set.of("DOCUMENT"),
                 "/address/city", Set.of("STRING"), "/address/zip", Set.of("INT32", "STRING")),
-                Set.of("/email", "/address/city"), true)));
+                Set.of("/email", "/address/city"), COMPLETE)));
 
         String updated = Files.readString(file);
         assertThat(result.updated()).isTrue();
@@ -60,7 +62,7 @@ class GenerationConfigReconcilerTest {
 
         var refreshedSchema = Map.of("people", new GenerationSchemaSource.FieldSchema(Map.of(
                 "/email", Set.of("STRING"), "/address/city", Set.of("STRING")),
-                Set.of("/email", "/address/city"), true));
+                Set.of("/email", "/address/city"), COMPLETE));
         assertThat(reconcile(file, refreshedSchema).updated()).isTrue();
         assertThat(Files.readString(file)).doesNotContain("/address/zip").contains("# /old:");
         assertThat(reconcile(file, refreshedSchema).updated()).isFalse();
@@ -78,8 +80,8 @@ class GenerationConfigReconcilerTest {
                 """);
         var schema = Map.of(
                 "items", new GenerationSchemaSource.FieldSchema(
-                        Map.of("/fresh", Set.of("BOOLEAN")), Set.of("/active"), true),
-                "empty", new GenerationSchemaSource.FieldSchema(Map.of(), Set.of(), true));
+                        Map.of("/fresh", Set.of("BOOLEAN")), Set.of("/active"), COMPLETE),
+                "empty", new GenerationSchemaSource.FieldSchema(Map.of(), Set.of(), COMPLETE));
         assertThat(reconcile(file, schema).obsolete()).isEqualTo(3);
         String updated = Files.readString(file);
         assertThat(updated).contains("# /obsolete: { kind: literal, value: { nested: [1, 2] } }",
@@ -115,10 +117,10 @@ class GenerationConfigReconcilerTest {
                     fields: { /keep: { kind: objectId } }
                 """);
         var schemas = Map.of(
-                "first", new GenerationSchemaSource.FieldSchema(Map.of(), Set.of(), true),
-                "second", new GenerationSchemaSource.FieldSchema(Map.of(), Set.of("/number"), true),
-                "third", new GenerationSchemaSource.FieldSchema(Map.of("/items", Set.of("ARRAY")), Set.of(), true),
-                "empty", new GenerationSchemaSource.FieldSchema(Map.of("/declared", Set.of("STRING")), Set.of(), false));
+                "first", new GenerationSchemaSource.FieldSchema(Map.of(), Set.of(), COMPLETE),
+                "second", new GenerationSchemaSource.FieldSchema(Map.of(), Set.of("/number"), COMPLETE),
+                "third", new GenerationSchemaSource.FieldSchema(Map.of("/items", Set.of("ARRAY")), Set.of(), COMPLETE),
+                "empty", new GenerationSchemaSource.FieldSchema(Map.of("/declared", Set.of("STRING")), Set.of(), EMPTY));
         var result = reconcile(file, schemas);
 
         assertThat(result.retained().get("first")).containsExactlyInAnyOrder("/raw", "/alias");
@@ -142,19 +144,31 @@ class GenerationConfigReconcilerTest {
         var reconciler = new GenerationConfigReconciler(() -> {
             throw new AssertionError("Source must not be opened");
         }, new GenerationConfigReader(directory.resolve("generation.json")), () -> false);
-        assertThatThrownBy(reconciler::reconcile).isInstanceOf(ConfigurationException.class).hasMessageContaining("requires");
+        assertThatThrownBy(() -> reconciler.reconcile(10_000))
+                .isInstanceOf(ConfigurationException.class).hasMessageContaining("requires");
+    }
+
+    @Test void rejectsInvalidSamplingLimitsBeforeReadingConfigOrOpeningSource() {
+        var reconciler = new GenerationConfigReconciler(() -> {
+            throw new AssertionError("Source must not be opened");
+        }, new GenerationConfigReader(directory.resolve("missing.yml")), () -> false);
+        for (int limit : new int[]{-1, 0, Integer.MAX_VALUE}) {
+            assertThatThrownBy(() -> reconciler.reconcile(limit))
+                    .isInstanceOf(ConfigurationException.class).hasMessageContaining("validation-max-documents");
+        }
     }
 
     private GenerationConfigReconciler.Result reconcile(Path file, Map<String, GenerationSchemaSource.FieldSchema> schemas) {
         return new GenerationConfigReconciler(() -> new GenerationSchemaSource() {
             @Override public void checkConnection() {}
             @Override public void close() {}
-            @Override public FieldSchema inspectFields(String collection, Set<String> paths, int batchSize,
+            @Override public FieldSchema inspectFields(String collection, Set<String> paths, int batchSize, int maxDocuments,
                                                        CancellationToken cancellation) {
+                assertThat(maxDocuments).isEqualTo(10_000);
                 FieldSchema schema = schemas.get(collection);
                 if (schema == null) throw new SourceInspectionException("Collection is unavailable");
                 return schema;
             }
-        }, new GenerationConfigReader(file), () -> false).reconcile();
+        }, new GenerationConfigReader(file), () -> false).reconcile(10_000);
     }
 }

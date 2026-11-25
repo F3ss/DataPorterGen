@@ -1,6 +1,7 @@
 package com.dataporter.adapters.mongo;
 
 import com.dataporter.generation.ports.out.GenerationSchemaSource.FieldSchema;
+import com.dataporter.generation.ports.out.GenerationSchemaSource.ScanCoverage;
 import com.dataporter.shared.error.SourceInspectionException;
 
 import org.bson.BsonDocument;
@@ -16,7 +17,6 @@ final class MongoFieldSchema {
     private final List<String> arrayIndexCandidates;
     private final BsonPointerOperations pointers = new BsonPointerOperations();
     private int pathCharacters;
-    private boolean documentsSeen;
 
     MongoFieldSchema(Set<String> configuredPaths) {
         this.configuredPaths = configuredPaths;
@@ -85,7 +85,6 @@ final class MongoFieldSchema {
     }
 
     void observe(BsonDocument document) {
-        documentsSeen = true;
         observeDocument("", document);
         for (String path : arrayIndexCandidates)
             if (!presentPaths.contains(path) && pointers.get(document, path) != null) presentPaths.add(path);
@@ -114,10 +113,10 @@ final class MongoFieldSchema {
         known.addAll(types);
     }
 
-    FieldSchema result() {
+    FieldSchema result(ScanCoverage coverage) {
         Map<String, Set<String>> result = new TreeMap<>();
         fields.forEach((path, types) -> result.put(path, types.isEmpty() ? Set.of("UNKNOWN") : Set.copyOf(types)));
-        return new FieldSchema(Collections.unmodifiableMap(result), Set.copyOf(presentPaths), documentsSeen);
+        return new FieldSchema(Collections.unmodifiableMap(result), Set.copyOf(presentPaths), coverage);
     }
 
     private static String child(String parent, String name) { return parent + "/" + BsonPointerOperations.escape(name); }

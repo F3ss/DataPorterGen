@@ -81,6 +81,54 @@ class MongoGenerationIntegrationTest {
         assertThat(new GenerationConfigReader(config).read().collections().getFirst().fields()).containsOnlyKeys("/declared");
     }
 
+    @Test void limitsValidationPerCollectionAndPreservesRulesOnTruncatedScans(@TempDir Path temp) throws Exception {
+        var properties = new MigrationProperties();
+        properties.setMode(OperationMode.VALIDATE_CONFIG);
+        properties.getSource().setUri(MONGO.getReplicaSetUrl());
+        properties.getSource().setDatabase("sampling_source_" + UUID.randomUUID().toString().replace("-", ""));
+        try (MongoClient client = MongoClients.create(properties.getSource().getUri())) {
+            MongoDatabase source = client.getDatabase(properties.getSource().getDatabase());
+            source.getCollection("large").insertMany(List.of(
+                    new Document("_id", 1).append("sampled", true),
+                    new Document("_id", 2).append("later", 123L).append("rare", "seen after the limit")));
+            source.getCollection("small").insertOne(new Document("_id", 1).append("smallField", "yes"));
+        }
+        Path config = temp.resolve("generation.yml");
+        properties.getGeneration().setConfigPath(config.toString());
+        properties.getGeneration().setValidationMaxDocuments(1);
+        Files.writeString(config, """
+                version: 1
+                batchSize: 1
+                collections:
+                  - name: large
+                    count: 1
+                    fields:
+                      /rare: { kind: literal, value: "a" }
+                      /obsolete: { kind: literal, value: "b" }
+                  - name: small
+                    count: 1
+                    fields:
+                      /old: { kind: literal, value: true }
+                """);
+
+        var runner = new MigrationCliRunner(properties);
+        runner.run(new DefaultApplicationArguments());
+
+        assertThat(runner.exitCode()).isEqualTo(ExitCodes.SUCCESS);
+        assertThat(Files.readString(config)).contains("# /sampled: BOOLEAN", "# /smallField: STRING", "# /old:")
+                .doesNotContain("# /later:", "# /obsolete:");
+        var collections = new GenerationConfigReader(config).read().collections();
+        assertThat(collections.getFirst().fields()).containsOnlyKeys("/rare", "/obsolete");
+        assertThat(collections.getLast().fields()).isEmpty();
+
+        properties.getGeneration().setValidationMaxDocuments(2);
+        runner.run(new DefaultApplicationArguments());
+
+        assertThat(runner.exitCode()).isEqualTo(ExitCodes.SUCCESS);
+        assertThat(Files.readString(config)).contains("# /later: INT64", "# /obsolete:");
+        assertThat(new GenerationConfigReader(config).read().collections().getFirst().fields()).containsOnlyKeys("/rare");
+    }
+
     @Test void filtersTemplateSnapshotWithMongoQueryBeforeGeneration(@TempDir Path temp) throws Exception {
         String suffix = UUID.randomUUID().toString().replace("-", "");
         Endpoint source = new Endpoint(MONGO.getReplicaSetUrl(), "generation_query_source_" + suffix);

@@ -1,5 +1,7 @@
 package com.dataporter.adapters.mongo;
 
+import com.dataporter.generation.ports.out.GenerationSchemaSource.ScanCoverage;
+
 import org.bson.BsonDocument;
 import org.junit.jupiter.api.Test;
 
@@ -19,14 +21,12 @@ class MongoFieldSchemaTest {
                   "items": { "bsonType": "array", "items": { "properties": { "code": { "bsonType": "int" } } } }
                 } } }] }
                 """));
-        assertThat(schema.result().absenceKnown()).isFalse();
         schema.observe(BsonDocument.parse("""
                 { "_id": 1, "nullable": null, "amount": 1.5, "a/b~c": { "value": true },
                   "items": [null, { "actual": "x" }] }
                 """));
-        var result = schema.result();
+        var result = schema.result(ScanCoverage.COMPLETE);
 
-        assertThat(result.absenceKnown()).isTrue();
         assertThat(result.presentPaths()).containsExactlyInAnyOrder("/declared", "/nullable", "/items/0/code", "/items/1/actual");
         assertThat(result.fields()).containsEntry("/unknownType", Set.of("UNKNOWN"))
                 .containsEntry("/declared", Set.of("STRING", "NULL"))

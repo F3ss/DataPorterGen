@@ -29,6 +29,7 @@ migration:
     allow-unproven-ids: ${GENERATION_ALLOW_UNPROVEN_IDS:false}
     validate-field-formats: ${GENERATION_VALIDATE_FIELD_FORMATS:true}
     update-field-formats: ${GENERATION_UPDATE_FIELD_FORMATS:false}
+    validation-max-documents: ${GENERATION_VALIDATION_MAX_DOCUMENTS:10000}
   retry:
     max-attempts: ${RETRY_MAX_ATTEMPTS:3}
     initial-delay: ${RETRY_INITIAL_DELAY:500ms}
