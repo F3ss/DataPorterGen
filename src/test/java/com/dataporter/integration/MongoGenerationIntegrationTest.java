@@ -1,11 +1,14 @@
 package com.dataporter.integration;
 
 import com.dataporter.adapters.config.GenerationConfigReader;
+import com.dataporter.adapters.cli.ExitCodes;
+import com.dataporter.adapters.cli.MigrationCliRunner;
 import com.dataporter.adapters.mongo.MongoGenerationBsonEngine;
 import com.dataporter.adapters.mongo.MongoGenerationSource;
 import com.dataporter.adapters.mongo.MongoGenerationTarget;
 import com.dataporter.adapters.reporting.JsonReportWriter;
 import com.dataporter.adapters.snapshot.FileTemplateCatalogFactory;
+import com.dataporter.config.MigrationProperties;
 import com.dataporter.generation.application.GenerationOrchestrator;
 import com.dataporter.generation.domain.GenerationCommand;
 import com.dataporter.generation.domain.GenerationOptions;
@@ -13,15 +16,19 @@ import com.dataporter.generation.domain.GenerationReport;
 import com.dataporter.generation.domain.TemplateSelection;
 import com.dataporter.shared.domain.Endpoint;
 import com.dataporter.shared.domain.OperationStatus;
+import com.dataporter.shared.domain.OperationMode;
 
 import com.mongodb.client.*;
 import com.mongodb.client.model.Sorts;
 import com.mongodb.client.model.IndexOptions;
+import com.mongodb.client.model.CreateCollectionOptions;
+import com.mongodb.client.model.ValidationOptions;
 import org.bson.Document;
 import org.bson.types.Decimal128;
 import org.bson.types.ObjectId;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.io.TempDir;
+import org.springframework.boot.DefaultApplicationArguments;
 import org.testcontainers.containers.MongoDBContainer;
 import org.testcontainers.junit.jupiter.*;
 import org.testcontainers.utility.DockerImageName;
@@ -37,6 +44,42 @@ import static org.assertj.core.api.Assertions.assertThat;
 @Testcontainers(disabledWithoutDocker = true)
 class MongoGenerationIntegrationTest {
     @Container static final MongoDBContainer MONGO = new MongoDBContainer(DockerImageName.parse("mongo:7.0.14"));
+
+    @Test void reconcilesYamlAgainstDeclaredAndObservedFieldsWithOnlySourceConfigured(@TempDir Path temp) throws Exception {
+        var properties = new MigrationProperties();
+        properties.setMode(OperationMode.VALIDATE_CONFIG);
+        properties.getSource().setUri(MONGO.getReplicaSetUrl());
+        properties.getSource().setDatabase("config_source_" + UUID.randomUUID().toString().replace("-", ""));
+        try (MongoClient client = MongoClients.create(properties.getSource().getUri())) {
+            MongoDatabase source = client.getDatabase(properties.getSource().getDatabase());
+            source.createCollection("items", new CreateCollectionOptions().validationOptions(new ValidationOptions()
+                    .validator(new Document("$jsonSchema", new Document("properties",
+                            new Document("declared", new Document("bsonType", "string"))
+                                    .append("hint", new Document("bsonType", "date")))))));
+            source.getCollection("items").insertMany(List.of(
+                    new Document("_id", 1).append("selected", true),
+                    new Document("_id", 2).append("outsideQuery", 123L)));
+        }
+        Path config = temp.resolve("generation.yml");
+        properties.getGeneration().setConfigPath(config.toString());
+        Files.writeString(config, """
+                version: 1
+                collections:
+                  - name: items
+                    count: 1
+                    query: { selected: true }
+                    fields:
+                      /declared: { kind: literal, value: "a" }
+                      /obsolete: { kind: literal, value: "b" }
+                """);
+
+        var runner = new MigrationCliRunner(properties);
+        runner.run(new DefaultApplicationArguments());
+
+        assertThat(runner.exitCode()).isEqualTo(ExitCodes.SUCCESS);
+        assertThat(Files.readString(config)).contains("# /obsolete:", "# /hint: DATE_TIME", "# /outsideQuery: INT64");
+        assertThat(new GenerationConfigReader(config).read().collections().getFirst().fields()).containsOnlyKeys("/declared");
+    }
 
     @Test void filtersTemplateSnapshotWithMongoQueryBeforeGeneration(@TempDir Path temp) throws Exception {
         String suffix = UUID.randomUUID().toString().replace("-", "");

@@ -1,4 +1,5 @@
 # BSON formats are checked by default. Use GENERATION_UPDATE_FIELD_FORMATS=true to update compatible rules in this file.
+# Use MIGRATION_MODE=VALIDATE_CONFIG to reconcile field paths against the source MongoDB and annotate this YAML.
 version: 1
 seed: 12345
 templateSelection: SHUFFLED_CYCLE

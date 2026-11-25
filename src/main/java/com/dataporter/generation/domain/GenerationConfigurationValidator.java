@@ -17,6 +17,12 @@ public final class GenerationConfigurationValidator {
             errors.add("target URI must use an acknowledged write concern; w=0 is not supported");
         if (!errors.isEmpty()) throw new ConfigurationException(String.join("; ", errors));
     }
+    public void validateSource(Endpoint source) {
+        List<String> errors = new ArrayList<>();
+        endpoint("source", source, errors);
+        if (!errors.isEmpty()) throw new ConfigurationException(String.join("; ", errors));
+    }
+
     private void endpoint(String name, Endpoint endpoint, List<String> errors) {
         if (endpoint.uri().isBlank()) errors.add(name + " URI must not be blank");
         if (!endpoint.uri().startsWith("mongodb://") && !endpoint.uri().startsWith("mongodb+srv://"))

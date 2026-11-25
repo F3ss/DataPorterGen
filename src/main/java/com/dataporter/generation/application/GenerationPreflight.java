@@ -349,18 +349,19 @@ final class GenerationPreflight {
             paths.add("/_id");
             ResolvedIdStrategy strategy = ids.get(collection.name());
             if (strategy.kind() == ResolvedIdStrategy.Kind.FIELD_REFERENCE) paths.add(strategy.detail());
-            collection.fields().values().forEach(rule -> collectRefTargets(rule, collection.name(), keep));
+            collection.fields().values().forEach(rule -> visitRefTargets(rule, collection.name(),
+                    (owner, path) -> addTarget(owner, path, keep)));
         }
         return keep;
     }
-    private static void collectRefTargets(GenerationRule rule, String owner, Map<String,Set<String>> keep) {
-        if (rule instanceof Ref ref) addTarget(ref.collection() == null ? owner : ref.collection(), ref.path(), keep);
+    static void visitRefTargets(GenerationRule rule, String owner, java.util.function.BiConsumer<String, String> visit) {
+        if (rule instanceof Ref ref) visit.accept(ref.collection() == null ? owner : ref.collection(), ref.path());
         else if (rule instanceof DateTime date && date.source() instanceof DateRef ref)
-            addTarget(ref.collection() == null ? owner : ref.collection(), ref.path(), keep);
-        else if (rule instanceof Concat concat) concat.parts().forEach(part -> collectRefTargets(part, owner, keep));
-        else if (rule instanceof WeightedChoice choice) choice.choices().forEach(item -> collectRefTargets(item.value(), owner, keep));
-        else if (rule instanceof Array array) collectRefTargets(array.items(), owner, keep);
-        else if (rule instanceof ObjectValue object) object.fields().values().forEach(value -> collectRefTargets(value, owner, keep));
+            visit.accept(ref.collection() == null ? owner : ref.collection(), ref.path());
+        else if (rule instanceof Concat concat) concat.parts().forEach(part -> visitRefTargets(part, owner, visit));
+        else if (rule instanceof WeightedChoice choice) choice.choices().forEach(item -> visitRefTargets(item.value(), owner, visit));
+        else if (rule instanceof Array array) visitRefTargets(array.items(), owner, visit);
+        else if (rule instanceof ObjectValue object) object.fields().values().forEach(value -> visitRefTargets(value, owner, visit));
     }
     private static void addTarget(String collection, String path, Map<String,Set<String>> keep) {
         Set<String> paths = keep.get(collection);

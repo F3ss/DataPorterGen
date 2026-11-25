@@ -9,6 +9,7 @@ import com.dataporter.generation.domain.SharedDateDefinition;
 import com.dataporter.generation.domain.TemplateQuery;
 import com.dataporter.generation.domain.TemplateSelection;
 import com.dataporter.generation.domain.UnconfiguredFields;
+import com.dataporter.generation.ports.out.GenerationConfigEditor;
 import com.dataporter.generation.ports.out.GenerationSpecReader;
 import com.dataporter.shared.error.ConfigurationException;
 
@@ -23,6 +24,7 @@ import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 import java.io.IOException;
 import java.math.BigDecimal;
 import java.math.BigInteger;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.nio.file.attribute.AclFileAttributeView;
 import java.nio.file.attribute.PosixFileAttributeView;
@@ -31,14 +33,13 @@ import java.time.Instant;
 import java.util.*;
 import java.util.function.Consumer;
 
-public final class GenerationConfigReader implements GenerationSpecReader {
+public final class GenerationConfigReader implements GenerationSpecReader, GenerationConfigEditor {
     private final Path configPath;
     private final ObjectMapper mapper;
 
     public GenerationConfigReader(Path configPath) {
         this.configPath = configPath.toAbsolutePath().normalize();
-        String lower = configPath.getFileName().toString().toLowerCase(Locale.ROOT);
-        JsonFactory factory = lower.endsWith(".yaml") || lower.endsWith(".yml")
+        JsonFactory factory = isYaml()
                 ? YAMLFactory.builder().enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION).build()
                 : JsonFactory.builder().enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION).build();
         mapper = JsonMapper.builder(factory)
@@ -48,12 +49,46 @@ public final class GenerationConfigReader implements GenerationSpecReader {
                 .build();
     }
 
+    private boolean isYaml() {
+        String name = configPath.getFileName().toString().toLowerCase(Locale.ROOT);
+        return name.endsWith(".yaml") || name.endsWith(".yml");
+    }
+
     @Override public GenerationSpec read() {
         try {
             byte[] content = Files.readAllBytes(configPath);
             return parse(mapper.readTree(content), content);
         } catch (IOException e) {
             throw new ConfigurationException("Cannot read or parse generation config " + configPath, e);
+        }
+    }
+
+    @Override public GenerationSpec readYaml() {
+        if (!isYaml()) throw new ConfigurationException("VALIDATE_CONFIG requires a .yml or .yaml generation config");
+        return read();
+    }
+
+    @Override public boolean reconcile(GenerationSpec original, List<CollectionChanges> changes,
+                                       Consumer<GenerationSpec> validate) {
+        try {
+            Path file = configPath.toRealPath();
+            byte[] content = readUnchanged(file, original.configHash());
+            String yaml = new String(content, StandardCharsets.UTF_8);
+            byte[] updated = new GenerationYamlEditor(yaml).edit(changes).getBytes(StandardCharsets.UTF_8);
+            if (Arrays.equals(content, updated)) return false;
+            JsonNode expected = mapper.readTree(content);
+            for (int i = 0; i < changes.size(); i++) {
+                ObjectNode fields = (ObjectNode) expected.get("collections").get(i).get("fields");
+                fields.remove(changes.get(i).obsolete());
+            }
+            JsonNode actual = mapper.readTree(updated);
+            if (!expected.equals(actual))
+                throw new ConfigurationException("Cannot preserve generation config values while reconciling fields");
+            validate.accept(parse(actual, updated));
+            replace(file, updated, original.configHash());
+            return true;
+        } catch (IOException e) {
+            throw new ConfigurationException("Cannot read or atomically update generation config " + configPath, e);
         }
     }
 
@@ -85,7 +120,7 @@ public final class GenerationConfigReader implements GenerationSpecReader {
     private byte[] readUnchanged(Path file, String originalHash) throws IOException {
         byte[] content = Files.readAllBytes(file);
         if (!sha256(content).equals(originalHash))
-            throw new ConfigurationException("Generation config changed during field format validation");
+            throw new ConfigurationException("Generation config changed during validation");
         return content;
     }
 
@@ -98,7 +133,7 @@ public final class GenerationConfigReader implements GenerationSpecReader {
             Files.write(temporary, content);
             if (posix != null) Files.setPosixFilePermissions(temporary, posix.readAttributes().permissions());
             if (!configPath.toRealPath().equals(file))
-                throw new ConfigurationException("Generation config moved during field format validation");
+                throw new ConfigurationException("Generation config moved during validation");
             readUnchanged(file, originalHash);
             Files.move(temporary, file, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
         } finally {

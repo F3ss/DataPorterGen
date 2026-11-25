@@ -35,13 +35,14 @@ public class DataPorterGenApplication {
         return """
                 DataPorterGen (Java 21)
                 Currently supported database: MongoDB
-                Required:
+                Source (all modes):
                   --migration.source.uri=mongodb://host:27017
                   --migration.source.database=source_db
+                Target (MIGRATE and GENERATE):
                   --migration.target.uri=mongodb://host:27017
                   --migration.target.database=target_db
                 Important options:
-                  --migration.mode=MIGRATE|GENERATE
+                  --migration.mode=MIGRATE|GENERATE|VALIDATE_CONFIG
                   --migration.existing-target-strategy=FAIL_IF_EXISTS|DROP_AND_RECREATE|MERGE
                   --migration.batch-size=1000 --migration.parallelism=2
                   --migration.verification-level=METADATA_AND_COUNTS|FULL
@@ -55,6 +56,9 @@ public class DataPorterGenApplication {
                   --migration.generation.allow-unproven-ids=false (set true to allow a constant _id)
                   --migration.generation.validate-field-formats=true
                   --migration.generation.update-field-formats=false
+                Config validation mode:
+                  --migration.mode=VALIDATE_CONFIG
+                  --migration.generation.config-path=./generation.yml (updates YAML in place)
                 Environment equivalents include SOURCE_MONGODB_URI, SOURCE_DATABASE,
                 TARGET_MONGODB_URI, TARGET_DATABASE, TARGET_STRATEGY,
                 VERIFICATION_LEVEL,

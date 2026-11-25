@@ -12,6 +12,7 @@ import com.dataporter.adapters.reporting.JsonReportWriter;
 import com.dataporter.adapters.snapshot.FileTemplateCatalogFactory;
 import com.dataporter.config.MigrationProperties;
 import com.dataporter.generation.application.GenerationOrchestrator;
+import com.dataporter.generation.application.GenerationConfigReconciler;
 import com.dataporter.generation.domain.GenerationCommand;
 import com.dataporter.generation.domain.GenerationConfigurationValidator;
 import com.dataporter.generation.domain.GenerationModeValidator;
@@ -23,6 +24,7 @@ import com.dataporter.migration.domain.ConfigurationValidator;
 import com.dataporter.migration.domain.MigrationCommand;
 import com.dataporter.migration.domain.MigrationReport;
 import com.dataporter.shared.domain.OperationMode;
+import com.dataporter.shared.error.SourceInspectionException;
 import com.dataporter.shared.security.SecretMasker;
 
 import org.slf4j.Logger;
@@ -42,8 +44,37 @@ public final class MigrationCliRunner implements ApplicationRunner {
     public MigrationCliRunner(MigrationProperties properties) { this.properties = properties; }
 
     @Override public void run(ApplicationArguments args) {
-        if (properties.getMode() == OperationMode.GENERATE) runGeneration();
-        else runMigration();
+        switch (properties.getMode()) {
+            case MIGRATE -> runMigration();
+            case GENERATE -> runGeneration();
+            case VALIDATE_CONFIG -> reconcileGenerationConfig();
+        }
+    }
+
+    private void reconcileGenerationConfig() {
+        AtomicBoolean cancelled = new AtomicBoolean();
+        Thread shutdownSignal = new Thread(() -> cancelled.set(true), "config-validation-shutdown-signal");
+        Runtime.getRuntime().addShutdownHook(shutdownSignal);
+        try {
+            var endpoint = properties.sourceEndpoint();
+            new GenerationConfigurationValidator().validateSource(endpoint);
+            var config = new GenerationConfigReader(properties.generationConfigPath());
+            var result = new GenerationConfigReconciler(() -> new MongoGenerationSource(endpoint), config, cancelled::get)
+                    .reconcile();
+            result.emptyCollections().forEach(name ->
+                    log.warn("Source collection {} is empty. Existing rules were kept.", SecretMasker.redact(name)));
+            result.retained().forEach((name, fields) -> log.warn("Rules referenced by active rules were kept in {}: {}",
+                    SecretMasker.redact(name), SecretMasker.redact(fields.toString())));
+            log.info("Generation config checked updated={} obsoleteRulesCommented={} missingFieldsAnnotated={}",
+                    result.updated(), result.obsolete(), result.missing());
+            exitCode = ExitCodes.SUCCESS;
+        } catch (RuntimeException e) {
+            exitCode = e instanceof SourceInspectionException ? ExitCodes.SOURCE_CONNECTION : ExitCodes.from(e);
+            log.error("Generation config validation failed: {}", SecretMasker.redact(e.getMessage()));
+        } finally {
+            try { Runtime.getRuntime().removeShutdownHook(shutdownSignal); }
+            catch (IllegalStateException ignored) { }
+        }
     }
 
     private void runMigration() {

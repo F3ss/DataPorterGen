@@ -27,7 +27,7 @@ import java.util.List;
 public class MigrationProperties {
     @NotNull private OperationMode mode = OperationMode.MIGRATE;
     @Valid @NotNull private Connection source = new Connection();
-    @Valid @NotNull private Connection target = new Connection();
+    @NotNull private Connection target = new Connection();
     @NotNull private ExistingTargetStrategy existingTargetStrategy = ExistingTargetStrategy.FAIL_IF_EXISTS;
     @NotNull private ConsistencyMode consistencyStrategy = ConsistencyMode.BASIC;
     @Min(1) @Max(100000) private int batchSize = 1000;
@@ -54,6 +54,8 @@ public class MigrationProperties {
                 new GenerationOptions(generation.validateOnly, generation.allowUnprovenIds,
                         generation.validateFieldFormats, generation.updateFieldFormats));
     }
+
+    public Endpoint sourceEndpoint() { return new Endpoint(source.uri, source.database); }
 
     public Path migrationReportPath() { return Path.of(reportPath); }
 
