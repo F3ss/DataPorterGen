@@ -240,6 +240,51 @@ class MongoGenerationBsonEngineTest {
         assertThat(nextIteration.getDateTime("second")).isNotEqualTo(second.getDateTime("second"));
     }
 
+    @Test void derivedSharedDatesUseTheBaseValueOfTheSameIterationAcrossCollections() {
+        var engine = new MongoGenerationBsonEngine();
+        var template = encode(BsonDocument.parse("{_id: 1}"));
+        var definitions = Map.of(
+                "qwe", new SharedDateDefinition(new RandomDateRange(
+                        java.time.Instant.parse("2025-01-01T00:00:00Z"), java.time.Instant.parse("2026-12-31T23:59:59.999Z"))),
+                "asd", new SharedDateDefinition(new DerivedDate("qwe", 0, java.time.Duration.ofDays(-3))),
+                "chained", new SharedDateDefinition(new DerivedDate("asd", 0, java.time.Duration.ofSeconds(5))));
+        var firstFields = Map.<String, GenerationRule>of("/base", sharedBsonDate("qwe"));
+        var secondFields = Map.<String, GenerationRule>of("/shifted", sharedBsonDate("asd"), "/chained", sharedBsonDate("chained"));
+
+        for (long iteration : new long[]{42, 43}) {
+            BsonDocument first = decode(engine.generate("first", iteration, 123, template, firstFields,
+                    ResolvedIdStrategy.explicit(), Map.of(), Map.of(), definitions, null, 1, null, UnconfiguredFields.SNAPSHOT));
+            BsonDocument second = decode(engine.generate("second", iteration, 123, template, secondFields,
+                    ResolvedIdStrategy.explicit(), Map.of(), Map.of(), definitions, null, 17, null, UnconfiguredFields.SNAPSHOT));
+            long base = first.getDateTime("base").getValue();
+            long shifted = base - java.time.Duration.ofDays(3).toMillis();
+            assertThat(second.getDateTime("shifted").getValue()).isEqualTo(shifted);
+            assertThat(second.getDateTime("chained").getValue()).isEqualTo(shifted + 5_000);
+        }
+    }
+
+    @Test void derivedSharedDatesApplyCalendarYearsInUtcBeforeElapsedOffsets() {
+        var engine = new MongoGenerationBsonEngine();
+        var definitions = Map.of(
+                "base", new SharedDateDefinition(new FixedDate(java.time.Instant.parse("2024-02-29T10:11:12.123456Z"))),
+                "shifted", new SharedDateDefinition(new DerivedDate("base", -1,
+                        java.time.Duration.ofDays(1).minusHours(2).plusMinutes(5).minusSeconds(3))));
+        var template = encode(BsonDocument.parse("{_id: 1}"));
+        var fields = Map.<String, GenerationRule>of("/date", sharedBsonDate("shifted"), "/local",
+                new DateTime(new SharedDateRef("shifted"), DateOutput.STRING, "uuuu-MM-dd HH:mm:ss.SSS",
+                        "Asia/Tashkent", "ROOT", RuleOptions.REQUIRED));
+        BsonDocument result = decode(engine.generate("items", 42, 123, template, fields,
+                ResolvedIdStrategy.explicit(), Map.of(), Map.of(), definitions, null, 1, null, UnconfiguredFields.SNAPSHOT));
+
+        assertThat(result.getDateTime("date").getValue())
+                .isEqualTo(java.time.Instant.parse("2023-03-01T08:16:09.123Z").toEpochMilli());
+        assertThat(result.getString("local").getValue()).isEqualTo("2023-03-01 13:16:09.123");
+    }
+
+    private static DateTime sharedBsonDate(String name) {
+        return new DateTime(new SharedDateRef(name), DateOutput.BSON_DATE, null, "UTC", "ROOT", RuleOptions.REQUIRED);
+    }
+
     @Test void generationIsDeterministicAndSupportsPointersRefsConcatNullAndOmit() {
         var engine = new MongoGenerationBsonEngine();
         BsonPayload template = encode(BsonDocument.parse("{_id: 1, keep: {x: 7}, remove: 'old', existingArray: [1, 2]}"));

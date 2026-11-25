@@ -29,6 +29,7 @@ import java.nio.file.*;
 import java.nio.file.attribute.AclFileAttributeView;
 import java.nio.file.attribute.PosixFileAttributeView;
 import java.security.MessageDigest;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
 import java.util.function.Consumer;
@@ -160,10 +161,7 @@ public final class GenerationConfigReader implements GenerationSpecReader, Gener
                 requireObject(sharedDateNodes, "root.sharedDates");
                 sharedDateNodes.properties().forEach(entry -> {
                     String at = "root.sharedDates." + entry.getKey();
-                    DateSource source = parseDateSource(entry.getValue(), at);
-                    if (!(source instanceof FixedDate) && !(source instanceof RandomDateRange))
-                        fail(at + " supports only fixed or randomRange");
-                    sharedDates.put(entry.getKey(), new SharedDateDefinition(source));
+                    sharedDates.put(entry.getKey(), new SharedDateDefinition(parseSharedDate(entry.getValue(), at)));
                 });
             }
             JsonNode collectionNodes = required(root, "collections", "root");
@@ -316,6 +314,37 @@ public final class GenerationConfigReader implements GenerationSpecReader, Gener
             }
             default -> throw new ConfigurationException("Unsupported generation rule kind at " + at + ": " + kind);
         };
+    }
+
+    private DateSource parseSharedDate(JsonNode node, String at) {
+        requireObject(node, at);
+        String kind = requiredText(node, "kind", at);
+        return switch (kind) {
+            case "fixed", "randomRange" -> parseDateSource(node, at);
+            case "derived" -> {
+                unknown(node, at, "kind", "source", "offsetYears", "offsetDays", "offsetHours", "offsetMinutes", "offsetSeconds");
+                String source = requiredText(node, "source", at);
+                long years = dateOffset(node, "offsetYears", at);
+                BigInteger seconds = BigInteger.valueOf(dateOffset(node, "offsetDays", at)).multiply(BigInteger.valueOf(86_400))
+                        .add(BigInteger.valueOf(dateOffset(node, "offsetHours", at)).multiply(BigInteger.valueOf(3_600)))
+                        .add(BigInteger.valueOf(dateOffset(node, "offsetMinutes", at)).multiply(BigInteger.valueOf(60)))
+                        .add(BigInteger.valueOf(dateOffset(node, "offsetSeconds", at)));
+                try {
+                    yield new DerivedDate(source, years, Duration.ofSeconds(seconds.longValueExact()));
+                } catch (ArithmeticException e) {
+                    throw new ConfigurationException(at + " offsets are outside the supported duration range");
+                }
+            }
+            default -> throw new ConfigurationException(at + " supports only fixed, randomRange, or derived");
+        };
+    }
+
+    private static long dateOffset(JsonNode node, String key, String at) {
+        if (!node.has(key)) return 0;
+        JsonNode value = node.get(key);
+        if (!value.isIntegralNumber() || !value.canConvertToLong())
+            fail(at + "." + key + " must be a signed 64-bit integer");
+        return value.longValue();
     }
 
     private DateSource parseDateSource(JsonNode node, String at) {

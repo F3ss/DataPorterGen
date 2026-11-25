@@ -58,7 +58,7 @@ class MongoGenerationIntegrationTest {
                                     .append("hint", new Document("bsonType", "date")))))));
             source.getCollection("items").insertMany(List.of(
                     new Document("_id", 1).append("selected", true),
-                    new Document("_id", 2).append("outsideQuery", 123L)));
+                    new Document("_id", 2).append("outsideQuery", 123L).append("note", "fixture-private-source-value")));
         }
         Path config = temp.resolve("generation.yml");
         properties.getGeneration().setConfigPath(config.toString());
@@ -77,7 +77,10 @@ class MongoGenerationIntegrationTest {
         runner.run(new DefaultApplicationArguments());
 
         assertThat(runner.exitCode()).isEqualTo(ExitCodes.SUCCESS);
-        assertThat(Files.readString(config)).contains("# /obsolete:", "# /hint: DATE_TIME", "# /outsideQuery: INT64");
+        assertThat(Files.readString(config))
+                .contains("# /obsolete:", "# /hint: DATE_TIME  # example: {\"$date\":",
+                        "# /outsideQuery: INT64  # example: {\"$numberLong\":", "# /note: STRING  # example: \"sample-")
+                .doesNotContain("fixture-private-source-value");
         assertThat(new GenerationConfigReader(config).read().collections().getFirst().fields()).containsOnlyKeys("/declared");
     }
 

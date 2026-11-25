@@ -270,11 +270,34 @@ final class BsonRuleEvaluator {
 
     private Instant sharedDateInstant(String name, long seed, long iteration,
                                       Map<String, SharedDateDefinition> sharedDates) {
+        DateSource source = sharedDate(name, sharedDates);
+        if (!(source instanceof DerivedDate))
+            return baseSharedDateInstant(name, source, seed, iteration);
+
+        Deque<DerivedDate> offsets = new ArrayDeque<>();
+        String baseName = name;
+        while (source instanceof DerivedDate offset) {
+            if (offsets.size() >= sharedDates.size())
+                throw new GenerationException("Cyclic shared date dependency involving " + name);
+            offsets.push(offset);
+            baseName = offset.sourceName();
+            source = sharedDate(baseName, sharedDates);
+        }
+        Instant result = baseSharedDateInstant(baseName, source, seed, iteration);
+        for (DerivedDate offset : offsets) result = offset.shift(result);
+        return result;
+    }
+
+    private static DateSource sharedDate(String name, Map<String, SharedDateDefinition> sharedDates) {
         SharedDateDefinition definition = sharedDates.get(name);
         if (definition == null) throw new GenerationException("Unknown shared date " + name);
-        if (definition.source() instanceof FixedDate fixed)
+        return definition.source();
+    }
+
+    private static Instant baseSharedDateInstant(String name, DateSource source, long seed, long iteration) {
+        if (source instanceof FixedDate fixed)
             return Instant.ofEpochMilli(fixed.value().toEpochMilli());
-        RandomDateRange range = (RandomDateRange) definition.source();
+        RandomDateRange range = (RandomDateRange) source;
         long from = range.from().toEpochMilli(), to = range.to().toEpochMilli();
         if (from == to) return Instant.ofEpochMilli(from);
         long millis = boundedLong(hash(seed, "$sharedDate", iteration, name), from, to);

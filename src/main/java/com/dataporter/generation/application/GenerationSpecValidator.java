@@ -12,6 +12,7 @@ import java.util.*;
 
 public final class GenerationSpecValidator {
     public void validate(GenerationSpec spec) {
+        new SharedDateValidator().validate(spec.sharedDates());
         Map<String, CollectionGenerationSpec> previous = new LinkedHashMap<>();
         for (CollectionGenerationSpec collection : spec.collections()) {
             validatePointers(collection);

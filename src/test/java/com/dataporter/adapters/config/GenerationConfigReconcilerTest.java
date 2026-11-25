@@ -28,6 +28,9 @@ class GenerationConfigReconcilerTest {
                 # Operator note 📄
                 version: 1
                 collections:
+                  # DataPorterGen missing fields
+                  # /address/zip: INT32 | STRING
+                  # DataPorterGen end missing fields
                   - name: people
                     count: 4
                     fields:
@@ -41,10 +44,11 @@ class GenerationConfigReconcilerTest {
                       /address/city: { kind: literal, value: "Tashkent" }
                 """.replace("\n", "\r\n");
         Files.writeString(file, original);
-        var result = reconcile(file, Map.of("people", new GenerationSchemaSource.FieldSchema(Map.of(
+        var originalSchema = Map.of("people", new GenerationSchemaSource.FieldSchema(Map.of(
                 "/_id", Set.of("OBJECT_ID"), "/email", Set.of("STRING"), "/address", Set.of("DOCUMENT"),
                 "/address/city", Set.of("STRING"), "/address/zip", Set.of("INT32", "STRING")),
-                Set.of("/email", "/address/city"), COMPLETE)));
+                Set.of("/email", "/address/city"), COMPLETE));
+        var result = reconcile(file, originalSchema);
 
         String updated = Files.readString(file);
         assertThat(result.updated()).isTrue();
@@ -52,13 +56,16 @@ class GenerationConfigReconcilerTest {
         assertThat(result.missing()).isEqualTo(1);
         assertThat(updated).contains(
                 "# Operator note 📄\r\n",
-                "  # /address/zip: INT32 | STRING\r\n",
                 "      # /old:\r\n      #   kind: literal\r\n      #   value: |-\r\n",
                 "      #     old text\r\n      #     second line\r\n",
                 "      # comment for email\r\n      /email: { kind: literal, value: \"a@b\" } # preserve\r\n")
-                .doesNotContain("# /address:", "# /_id:");
+                .doesNotContain("# /address:", "# /_id:", "# /address/zip: INT32 | STRING\r\n")
+                .containsOnlyOnce("# /address/zip:")
+                .containsPattern("  # /address/zip: INT32 \\| STRING  # example: (?:[0-9]+|\"sample-[0-9a-f]{8}\")\r\n");
         assertThat(new GenerationConfigReader(file).read().collections().getFirst().fields().keySet())
                 .containsExactly("/email", "/address/city");
+        assertThat(reconcile(file, originalSchema).updated()).isFalse();
+        assertThat(Files.readString(file)).isEqualTo(updated);
 
         var refreshedSchema = Map.of("people", new GenerationSchemaSource.FieldSchema(Map.of(
                 "/email", Set.of("STRING"), "/address/city", Set.of("STRING")),

@@ -30,6 +30,8 @@ if (!customers.every(item => canonical(item._id).startsWith('{"$oid":'))) fail("
 if (new Set(customers.map(item => item._id.toString())).size !== 3) fail("generated customer _id values are not unique");
 if (!customers.every(item => canonical(item.operationDate) === canonical(ISODate("2026-09-02T10:20:30.123Z"))))
   fail("customer shared BSON date differs");
+if (!customers.every(item => canonical(item.previousOperationDate) === canonical(ISODate("2026-08-30T10:20:30.123Z"))))
+  fail("customer derived shared BSON date differs");
 if (!customers.every(item => item.operationText === "2026-09-02T10:20:30.123Z"))
   fail("customer shared formatted date differs");
 

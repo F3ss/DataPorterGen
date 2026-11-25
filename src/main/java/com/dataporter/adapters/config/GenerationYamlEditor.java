@@ -83,9 +83,14 @@ final class GenerationYamlEditor {
             archived.forEach(text -> header.append(comment(text, indent)).append(newline));
         }
         if (!changes.missing().isEmpty()) {
+            String collectionName = ((ScalarNode) property(collection, "name")).getValue();
             header.append(indent).append(MISSING_START).append(newline);
-            changes.missing().forEach((path, types) -> header.append(indent).append("# ")
-                    .append(commentPath(path)).append(": ").append(String.join(" | ", new TreeSet<>(types))).append(newline));
+            changes.missing().forEach((path, types) -> {
+                List<String> sortedTypes = types.stream().sorted().toList();
+                header.append(indent).append("# ").append(commentPath(path)).append(": ")
+                        .append(String.join(" | ", sortedTypes)).append("  # example: ")
+                        .append(BsonFieldExample.render(collectionName, path, sortedTypes)).append(newline);
+            });
             header.append(indent).append(MISSING_END).append(newline);
         }
         if (inline && !header.isEmpty()) edits.add(new Edit(start, start, newline + header + indent));

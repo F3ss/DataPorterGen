@@ -137,6 +137,14 @@ class GenerationConfigReaderTest {
                     from: 2025-01-01T00:00:00Z
                     to: 2026-12-31T23:59:59.999Z
                   closingDate: { kind: fixed, value: 2030-12-31T23:59:59.123456Z }
+                  previousOperation:
+                    kind: derived
+                    source: operationDate
+                    offsetYears: 1
+                    offsetDays: -3
+                    offsetHours: -2
+                    offsetMinutes: 10
+                    offsetSeconds: -5
                 collections:
                   - name: events
                     count: 1
@@ -149,10 +157,12 @@ class GenerationConfigReaderTest {
 
         var spec = new GenerationConfigReader(file).read();
 
-        assertThat(spec.sharedDates().keySet()).containsExactly("operationDate", "closingDate");
+        assertThat(spec.sharedDates().keySet()).containsExactly("operationDate", "closingDate", "previousOperation");
         assertThat(spec.sharedDates().get("operationDate").source()).isInstanceOf(RandomDateRange.class);
         assertThat(spec.sharedDates().get("closingDate")).isEqualTo(new SharedDateDefinition(
                 new FixedDate(java.time.Instant.parse("2030-12-31T23:59:59.123456Z"))));
+        assertThat(spec.sharedDates().get("previousOperation")).isEqualTo(new SharedDateDefinition(new DerivedDate(
+                "operationDate", 1, java.time.Duration.ofDays(-3).minusHours(2).plusMinutes(10).minusSeconds(5))));
         DateTime rule = (DateTime) spec.collections().getFirst().fields().get("/createdAt");
         assertThat(rule.source()).isEqualTo(new SharedDateRef("operationDate"));
     }
@@ -173,10 +183,29 @@ class GenerationConfigReaderTest {
 
         assertThatThrownBy(() -> new GenerationConfigReader(reference).read())
                 .isInstanceOf(ConfigurationException.class)
-                .hasMessageContaining("sharedDates.operationDate supports only fixed or randomRange");
+                .hasMessageContaining("sharedDates.operationDate supports only fixed, randomRange, or derived");
         assertThatThrownBy(() -> new GenerationConfigReader(unknown).read())
                 .isInstanceOf(ConfigurationException.class)
                 .hasMessageContaining("Unknown property root.sharedDates.operationDate.extra");
+    }
+
+    @Test void rejectsInvalidDerivedDateDefinitions(@TempDir Path temp) throws Exception {
+        Path config = temp.resolve("derived.yml");
+        Map<String, String> invalid = Map.of(
+                "kind: derived, offsetDays: -3", "source is required",
+                "kind: derived, source: qwe, offsetSeconds: 1.5", "offsetSeconds must be a signed 64-bit integer",
+                "kind: derived, source: qwe, offsetYears: '2'", "offsetYears must be a signed 64-bit integer",
+                "kind: derived, source: qwe, offsetMonths: 1", "Unknown property root.sharedDates.asd.offsetMonths",
+                "kind: derived, source: qwe, offsetDays: 9223372036854775807", "offsets are outside");
+        for (var entry : invalid.entrySet()) {
+            Files.writeString(config, """
+                    version: 1
+                    sharedDates: { asd: { %s } }
+                    collections: [{ name: events, count: 1, fields: {} }]
+                    """.formatted(entry.getKey()));
+            assertThatThrownBy(() -> new GenerationConfigReader(config).read())
+                    .isInstanceOf(ConfigurationException.class).hasMessageContaining(entry.getValue());
+        }
     }
 
     @Test void readsYamlStrictlyAndPreservesCollectionAndFieldOrder(@TempDir Path temp) throws Exception {

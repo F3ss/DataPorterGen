@@ -72,6 +72,36 @@ class GenerationSpecValidatorTest {
                 .hasMessageContaining("Unknown shared date missing");
     }
 
+    @Test void rejectsUnknownAndCyclicDerivedDatesBeforeGeneration() {
+        var items = collection("items", 1, Map.of());
+        var missing = spec(Map.of("asd", new SharedDateDefinition(
+                new DerivedDate("missing", 0, java.time.Duration.ZERO))), items);
+        assertThatThrownBy(() -> validator().validate(missing))
+                .isInstanceOf(ConfigurationException.class).hasMessageContaining("Unknown shared date missing referenced by asd");
+
+        var cycle = spec(Map.of("qwe", new SharedDateDefinition(new DerivedDate("asd", 0, java.time.Duration.ZERO)),
+                "asd", new SharedDateDefinition(new DerivedDate("qwe", 0, java.time.Duration.ZERO))), items);
+        assertThatThrownBy(() -> validator().validate(cycle))
+                .isInstanceOf(ConfigurationException.class).hasMessageContaining("Cyclic shared date dependency");
+    }
+
+    @Test void validatesEntireDerivedRangeAcrossALeapDay() {
+        var items = collection("items", 1, Map.of());
+        var range = new SharedDateDefinition(new RandomDateRange(
+                java.time.Instant.parse("2024-02-28T12:00:00Z"), java.time.Instant.parse("2024-02-29T00:00:00Z")));
+        var max = java.time.Instant.ofEpochMilli(Long.MAX_VALUE);
+        long seconds = java.time.Duration.between(java.time.Instant.parse("2025-02-28T18:00:00Z"), max).getSeconds();
+
+        var overflowing = spec(Map.of("qwe", range,
+                "asd", new SharedDateDefinition(new DerivedDate("qwe", 1, java.time.Duration.ofSeconds(seconds)))), items);
+        assertThatThrownBy(() -> validator().validate(overflowing))
+                .isInstanceOf(ConfigurationException.class).hasMessageContaining("Shared date asd exceeds the BSON Date range");
+
+        var valid = spec(Map.of("qwe", range,
+                "asd", new SharedDateDefinition(new DerivedDate("qwe", 1, java.time.Duration.ofSeconds(seconds).minusDays(1)))), items);
+        assertThatCode(() -> validator().validate(valid)).doesNotThrowAnyException();
+    }
+
     private GenerationSpecValidator validator() { return new GenerationSpecValidator(); }
     private GenerationSpec spec(CollectionGenerationSpec... values) { return spec(Map.of(), values); }
     private GenerationSpec spec(Map<String, SharedDateDefinition> sharedDates, CollectionGenerationSpec... values) {

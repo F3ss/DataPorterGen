@@ -2,7 +2,9 @@ package com.dataporter.generation.domain;
 
 import java.math.BigDecimal;
 import java.math.BigInteger;
+import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -150,7 +152,7 @@ public sealed interface GenerationRule permits GenerationRule.Literal, Generatio
         public Uuid { if (output == null) throw new IllegalArgumentException("uuid output is required"); }
     }
 
-    sealed interface DateSource permits RandomDateRange, FixedDate, DateRef, SharedDateRef { }
+    sealed interface DateSource permits RandomDateRange, FixedDate, DateRef, SharedDateRef, DerivedDate { }
     record RandomDateRange(Instant from, Instant to) implements DateSource {
         public RandomDateRange { if (from == null || to == null || from.isAfter(to)) throw new IllegalArgumentException("invalid dateTime range"); }
     }
@@ -165,11 +167,24 @@ public sealed interface GenerationRule permits GenerationRule.Literal, Generatio
             if (name == null || name.isBlank()) throw new IllegalArgumentException("shared date name is required");
         }
     }
+    record DerivedDate(String sourceName, long offsetYears, Duration offset) implements DateSource {
+        public DerivedDate {
+            if (sourceName == null || sourceName.isBlank()) throw new IllegalArgumentException("derived date source is required");
+            Objects.requireNonNull(offset, "derived date offset is required");
+            if (offset.getNano() != 0) throw new IllegalArgumentException("derived date offset must use whole seconds");
+        }
+
+        public Instant shift(Instant instant) {
+            Instant base = offsetYears == 0 ? instant : instant.atOffset(ZoneOffset.UTC).plusYears(offsetYears).toInstant();
+            return base.plus(offset);
+        }
+    }
     enum DateOutput { BSON_DATE, STRING, DOUBLE }
     record DateTime(DateSource source, DateOutput output, String pattern, String zone, String locale,
                     RuleOptions options) implements GenerationRule {
         public DateTime {
             if (source == null || output == null) throw new IllegalArgumentException("dateTime source and output are required");
+            if (source instanceof DerivedDate) throw new IllegalArgumentException("derived dates must be defined in sharedDates");
             if (output != DateOutput.BSON_DATE && (pattern == null || pattern.isBlank()))
                 throw new IllegalArgumentException("dateTime " + output + " pattern is required");
         }

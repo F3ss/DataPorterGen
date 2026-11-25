@@ -1,5 +1,5 @@
 # BSON formats are checked by default. Use GENERATION_UPDATE_FIELD_FORMATS=true to update compatible rules in this file.
-# Use MIGRATION_MODE=VALIDATE_CONFIG to reconcile field paths against the source MongoDB and annotate this YAML.
+# Use MIGRATION_MODE=VALIDATE_CONFIG to annotate unconfigured fields with BSON types and synthetic examples.
 # GENERATION_VALIDATION_MAX_DOCUMENTS overrides the default sample of 10000 documents per collection.
 version: 1
 seed: 12345
@@ -14,6 +14,10 @@ sharedDates:
     kind: randomRange
     from: 2020-01-01T00:00:00Z
     to: 2030-01-01T00:00:00Z
+  previousOperationDate:
+    kind: derived
+    source: operationDate
+    offsetDays: -3
 
 collections:
   - name: customers
@@ -68,6 +72,10 @@ collections:
       /createdAt:
         kind: dateTime
         source: { kind: shared, name: operationDate }
+        output: BSON_DATE
+      /previousOperationDate:
+        kind: dateTime
+        source: { kind: shared, name: previousOperationDate }
         output: BSON_DATE
       /profile:
         kind: object
